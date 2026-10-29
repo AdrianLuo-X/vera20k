@@ -157,6 +157,43 @@ test('WS rejects arbitrary routes, foreign origins, text and oversized messages'
   assert.equal(code, 1009);
 });
 
+for (const lanSignal of [undefined, { iceServers: [] }]) {
+  test(`malformed upgrade URLs are rejected with LAN signaling ${lanSignal ? 'on' : 'off'}`, { timeout: 10000 }, async t => {
+    const { base, udp, socket, gateway } = await fixture(t, { lanSignal });
+    // Fail synchronously if the callback throws, before opening an upgraded socket
+    // that the failed callback would leave outside the gateway's cleanup registry.
+    assert.doesNotThrow(() => gateway.server.emit('upgrade',
+      { url: 'http://[', headers: {} }, { end() {} }, Buffer.alloc(0)));
+    const response = await new Promise((resolve, reject) => {
+      // Node accepts this HTTP request target, but the WHATWG URL parser rejects it.
+      const request = http.get(base, {
+        path: 'http://[', headers: { connection: 'Upgrade', upgrade: 'websocket' },
+      }, resolve);
+      request.on('error', reject);
+      request.setTimeout(2000, () => request.destroy(new Error('Upgrade rejection timed out')));
+    });
+    const chunks = [];
+    for await (const chunk of response) chunks.push(chunk);
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.headers.connection, 'close');
+    assert.equal(Buffer.concat(chunks).length, 0);
+
+    // The same gateway must still carry real game datagrams after the rejection.
+    udp.on('message', (data, peer) => udp.send(data, peer.port, peer.address));
+    const game = await socket();
+    const echoed = once(game, 'message');
+    const payload = Buffer.from([1, 2, 3]);
+    game.send(payload);
+    assert.deepEqual((await echoed)[0], payload);
+    if (lanSignal) {
+      const signaling = new WebSocket(`${base.replace('http:', 'ws:')}/lan/signal`, { origin });
+      t.after(() => signaling.terminate());
+      const [welcome] = await once(signaling, 'message');
+      assert.equal(JSON.parse(welcome.toString()).type, 'welcome');
+    }
+  });
+}
+
 test('datagrams past a connection budget or full queue are lost while the connection stays open', { timeout: 10000 }, async t => {
   const { udp, socket } = await fixture(t);
   const flood = await socket();

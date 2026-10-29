@@ -153,7 +153,12 @@ export function createGateway({
     maxFragments: 128, maxBufferedChunks: 128, closeTimeout: 1000,
   });
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url ?? '/', 'http://gateway');
+    let url;
+    try { url = new URL(req.url ?? '/', 'http://gateway'); }
+    catch {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      return;
+    }
     if (signaling && !closing && url.pathname === '/lan/signal') {
       signaling.upgrade(req, socket, head, url);
       return;
