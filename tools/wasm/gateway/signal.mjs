@@ -7,6 +7,7 @@ import { rateLimit } from './rate_limit.mjs';
 export const SIGNAL_LIMITS = Object.freeze({
   message: 16 * 1024, connections: 256, groupMembers: 16,
   messagesPerSecond: 64, handshakesPerSecond: 128,
+  wsQueueBytes: 256 * 1024, totalWsQueueBytes: 1024 * 1024,
 });
 // Virtual LAN 10.20.0.0/24; members use host numbers 1..254.
 const VIRTUAL_NETWORK = 0x0a140000;
@@ -72,15 +73,33 @@ function relayable(data) {
 
 export function createSignaling({ origin, iceServers = [], clientIpHeader }) {
   const groups = new Map();
-  const finishers = new Set();
+  const finishers = new Map();
   const handshakes = rateLimit(SIGNAL_LIMITS.handshakesPerSecond);
   const wss = new WebSocketServer({
-    noServer: true, maxPayload: SIGNAL_LIMITS.message, perMessageDeflate: false,
+    noServer: true, maxPayload: SIGNAL_LIMITS.message, perMessageDeflate: false, autoPong: false,
     maxFragments: 16, maxBufferedChunks: 16, closeTimeout: 1000,
   });
 
+  function canSend(ws, bytes) {
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    // ws 8.22.0 bufferedAmount includes framing; reserve its largest unmasked
+    // frame header for the new write. The live sockets remain the queue authority.
+    const framedBytes = bytes + 10;
+    let queued = 0;
+    for (const peer of finishers.keys()) queued += peer.bufferedAmount;
+    if (ws.bufferedAmount + framedBytes > SIGNAL_LIMITS.wsQueueBytes
+      || queued + framedBytes > SIGNAL_LIMITS.totalWsQueueBytes) {
+      finishers.get(ws)?.();
+      return false;
+    }
+    return true;
+  }
+
   function send(ws, message) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    const payload = JSON.stringify(message);
+    if (!canSend(ws, Buffer.byteLength(payload))) return false;
+    ws.send(payload, error => { if (error) finishers.get(ws)?.(); });
+    return true;
   }
 
   function admit(key, prefer) {
@@ -125,23 +144,33 @@ export function createSignaling({ origin, iceServers = [], clientIpHeader }) {
         const traffic = rateLimit(SIGNAL_LIMITS.messagesPerSecond);
         let alive = true;
         let closed = false;
+        let announced = false;
         const finish = () => {
           if (closed) return;
           closed = true;
-          finishers.delete(finish);
+          finishers.delete(ws);
           clearInterval(heartbeat);
           group.members.delete(address);
           release(key, group, address);
-          for (const member of group.members.values()) send(member, { type: 'leave', peer: address });
           ws.terminate();
+          if (announced) {
+            for (const member of group.members.values()) send(member, { type: 'leave', peer: address });
+          }
         };
+        const written = error => { if (error) finish(); };
         const heartbeat = setInterval(() => {
-          if (!alive) { finish(); return; }
+          if (!alive || !canSend(ws, 0)) { finish(); return; }
           alive = false;
-          ws.ping();
+          ws.ping(undefined, false, written);
         }, 30000);
         heartbeat.unref();
-        finishers.add(finish);
+        finishers.set(ws, finish);
+        // Disable automatic Pong so control replies cannot bypass the same budget.
+        ws.on('ping', data => {
+          if (closed) return;
+          if (!traffic() || !canSend(ws, data.length)) { finish(); return; }
+          ws.pong(data, false, written);
+        });
         ws.on('pong', () => { alive = true; });
         ws.on('close', finish);
         ws.on('error', finish);
@@ -158,12 +187,16 @@ export function createSignaling({ origin, iceServers = [], clientIpHeader }) {
           const target = group.members.get(message.to);
           if (target) send(target, { type: 'signal', from: address, data: forwarded });
         });
-        send(ws, { type: 'welcome', address, peers: others, iceServers });
-        for (const peer of others) send(group.members.get(peer), { type: 'join', peer: address });
+        if (!send(ws, { type: 'welcome', address, peers: others, iceServers })) return;
+        announced = true;
+        for (const peer of others) {
+          if (closed) break;
+          send(group.members.get(peer), { type: 'join', peer: address });
+        }
       });
     },
     close() {
-      for (const finish of [...finishers]) finish();
+      for (const finish of [...finishers.values()]) finish();
       for (const group of groups.values()) for (const timer of group.released.values()) clearTimeout(timer);
       groups.clear();
       wss.close();

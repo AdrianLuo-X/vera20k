@@ -19,7 +19,7 @@ VERA_RELAY_HOST=relay.example.com VERA_RELAY_PORT=5000 \
 
 浏览器的 `WS_PROXY_URL` 会编译进 `wasm-net` 构建，默认值为 `wss://wss.vera20k.com`。这是客户端配置，与服务端的 UDP 目标分别设置。请在该 origin 部署终止 TLS 的反向代理，将 `/game/*` 路由的 WebSocket Upgrade 连接以及 `/v1/*` HTTP 请求转发到本进程。把 `VERA_CLIENT_IP_HEADER` 设为该代理写入浏览器地址的请求头（例如 `cf-connecting-ip`；`x-forwarded-for` 取最后一项）；客户端能直连网关时不要设置该项。保留浏览器的 Origin 请求头；WebSocket 空闲超时至少设为 70 秒。Node 服务默认绑定 `127.0.0.1:8788`（可通过 `HOST` 和 `PORT` 覆盖），不提供游戏静态文件。静态站点和网关可以分别托管。
 
-局域网信令默认关闭。设置 `VERA_LAN_SIGNAL=1` 后会为 `wasm-lan` 构建启用 `/lan/signal`：按公网地址分组、分配虚拟 IPv4，并在组内转发 WebRTC 描述和候选地址；游戏数据报不经过网关。部署在反向代理后时，把 `/lan/*` 的 WebSocket Upgrade 转发到本进程；分组使用 `VERA_CLIENT_IP_HEADER` 给出的地址。`VERA_LAN_STUN` 可选，填写逗号分隔的 `stun:` 地址，用于隐藏 host candidate 的网络；TURN 会被拒绝。限制定义在 `signal.mjs`：256 个连接、每组 16 人、单条消息 16 KiB、每连接每秒 64 条。离开的浏览器的虚拟地址会保留两分钟，直到其他成员已不再使用它；只有请求取回该地址的信令重连才能获得它。
+局域网信令默认关闭。设置 `VERA_LAN_SIGNAL=1` 后会为 `wasm-lan` 构建启用 `/lan/signal`：按公网地址分组、分配虚拟 IPv4，并在组内转发 WebRTC 描述和候选地址；游戏数据报不经过网关。部署在反向代理后时，把 `/lan/*` 的 WebSocket Upgrade 转发到本进程；分组使用 `VERA_CLIENT_IP_HEADER` 给出的地址。`VERA_LAN_STUN` 可选，填写逗号分隔的 `stun:` 地址，用于隐藏 host candidate 的网络；TURN 会被拒绝。限制定义在 `signal.mjs`：256 个连接、每组 16 人、单条消息 16 KiB、每连接每秒最多接收 64 条消息或 Ping。JSON、Ping 和 Pong 写入都会检查待发送队列（含帧头预留）：每接收端最多 256 KiB，所有信令连接合计最多 1 MiB。写入会超过任一上限时，按正常成员清理流程移除对应接收端；欢迎消息被拒绝的连接不会发布加入通知。离开的浏览器的虚拟地址会保留两分钟，直到其他成员已不再使用它；只有请求取回该地址的信令重连才能获得它。
 
 本地开发可以使用 `VERA_WEB_ORIGIN=http://localhost:8000`。若大厅使用 HTTP，必须同时设置 `VERA_ALLOW_LOCAL_HTTP=1`，并使用回环地址的大厅 origin，例如 `VERA_LOBBY_URL=http://127.0.0.1:8790`。远程 HTTP 地址会被拒绝。此时浏览器也必须使用匹配的本地代理 origin `ws://localhost:8788` 进行编译。
 
