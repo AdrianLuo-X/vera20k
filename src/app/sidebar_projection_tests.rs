@@ -724,6 +724,45 @@ fn native_order_reaches_localized_views_scrolling_and_click_identity() {
 }
 
 #[test]
+fn touchpad_release_keeps_scrolled_cameos_selectable_after_refresh() {
+    let (sim, rules, owner, csf, _) = native_history_world();
+    let options = all_build_options_for_owner(&sim, &rules, "Americans");
+    let candidates = cameo_candidates(&sim, &rules, Some(&csf), owner, &options, &[], &[]);
+    let mut projection = SidebarProjectionState::default();
+    projection.reconcile_fixture(owner, &candidates, 3);
+    let tab = SidebarTab::Vehicle;
+    let first = view(&sim, &options, &projection, tab, 360.0);
+    assert!(first.max_scroll_rows > 0, "the strip must overflow");
+
+    let row = crate::app::input::dispatch::wheel_scrolled_row(
+        first.scroll_rows,
+        first.max_scroll_rows,
+        -1.0,
+    );
+    projection.set_scroll_row(tab, row);
+    let scrolled = view(&sim, &options, &projection, tab, 360.0);
+    let selected = scrolled.items[0].type_id.clone();
+
+    // macOS sends a zero-motion wheel event when the touchpad gesture ends.
+    let released = crate::app::input::dispatch::wheel_scrolled_row(
+        scrolled.scroll_rows,
+        scrolled.max_scroll_rows,
+        0.0,
+    );
+    projection.set_scroll_row(tab, released);
+    projection.reconcile_fixture(owner, &candidates, 3);
+    let after = view(&sim, &options, &projection, tab, 360.0);
+    assert_eq!(
+        after.scroll_rows, row,
+        "release must preserve the lower row"
+    );
+    assert!(matches!(
+        hit_test_item(&after.items[0], false, false),
+        SidebarAction::CameoPress { type_id, .. } if type_id == selected
+    ));
+}
+
+#[test]
 fn only_an_accepted_new_object_in_the_same_house_announces_construction_options() {
     let (sim, rules, owner, csf, _) = native_history_world();
     let options = all_build_options_for_owner(&sim, &rules, "Americans");

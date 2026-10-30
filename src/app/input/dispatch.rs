@@ -991,8 +991,16 @@ pub(crate) fn wheel_action(delta_lines: f32) -> WheelAction {
 ///
 /// The native scroll refuses to move above row 0 or past the strip's computed
 /// visible capacity, so both ends saturate rather than wrap.
-pub(crate) fn wheel_scrolled_row(current: usize, max_rows: usize, action: WheelAction) -> usize {
-    match action {
+pub(crate) fn wheel_scrolled_row(current: usize, max_rows: usize, delta_lines: f32) -> usize {
+    // Winit also forwards touchpad phase boundaries and horizontal-only events.
+    // Their zero vertical delta is no wheel notch, so it must not reach the
+    // native sign mapping (which would interpret zero as SidebarUp).
+    // winit 0.30.13, macOS View::scroll_wheel:
+    // https://github.com/rust-windowing/winit/blob/v0.30.13/src/platform_impl/macos/view.rs#L663-L701
+    if delta_lines == 0.0 {
+        return current;
+    }
+    match wheel_action(delta_lines) {
         WheelAction::SidebarUp => current.saturating_sub(1),
         WheelAction::SidebarDown => (current + 1).min(max_rows),
     }
@@ -1011,11 +1019,7 @@ pub(crate) fn sidebar_wheel_scroll(state: &mut AppState, delta_lines: f32) {
     let Some(view) = current_sidebar_view(state).cloned() else {
         return;
     };
-    let row = wheel_scrolled_row(
-        view.scroll_rows,
-        view.max_scroll_rows,
-        wheel_action(delta_lines),
-    );
+    let row = wheel_scrolled_row(view.scroll_rows, view.max_scroll_rows, delta_lines);
     let presentation = &mut state.match_state.match_presentation;
     presentation
         .sidebar_projection
@@ -2156,24 +2160,27 @@ mod wheel_tests {
         }
     }
 
-    /// The native test is a signed less-than against zero, so a zero delta goes
-    /// up rather than doing nothing.
+    /// The native sign test maps zero to up; the Winit adapter filters
+    /// zero-motion events before that mapping.
     #[test]
-    fn zero_delta_scrolls_up() {
+    fn native_sign_test_maps_zero_to_up() {
         assert_eq!(wheel_action(0.0), WheelAction::SidebarUp);
     }
 
     #[test]
     fn rows_move_one_at_a_time_and_saturate_at_both_ends() {
-        assert_eq!(wheel_scrolled_row(0, 4, WheelAction::SidebarDown), 1);
-        assert_eq!(wheel_scrolled_row(3, 4, WheelAction::SidebarDown), 4);
+        assert_eq!(wheel_scrolled_row(0, 4, -1.0), 1);
+        assert_eq!(wheel_scrolled_row(3, 4, -1.0), 4);
         // Refuses to move past the strip's computed capacity.
-        assert_eq!(wheel_scrolled_row(4, 4, WheelAction::SidebarDown), 4);
-        assert_eq!(wheel_scrolled_row(2, 4, WheelAction::SidebarUp), 1);
+        assert_eq!(wheel_scrolled_row(4, 4, -1.0), 4);
+        assert_eq!(wheel_scrolled_row(2, 4, 1.0), 1);
         // Refuses to move above row 0.
-        assert_eq!(wheel_scrolled_row(0, 4, WheelAction::SidebarUp), 0);
+        assert_eq!(wheel_scrolled_row(0, 4, 1.0), 0);
         // A strip that fits entirely on screen cannot scroll at all.
-        assert_eq!(wheel_scrolled_row(0, 0, WheelAction::SidebarDown), 0);
+        assert_eq!(wheel_scrolled_row(0, 0, -1.0), 0);
+        // Gesture boundaries and horizontal-only events keep the current row.
+        assert_eq!(wheel_scrolled_row(1, 4, 0.0), 1);
+        assert_eq!(wheel_scrolled_row(1, 4, -0.0), 1);
     }
 }
 
