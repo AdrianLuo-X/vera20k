@@ -588,7 +588,7 @@ jobs:
   # exact-main branch policy is the security boundary, outside workflow YAML.
   macos-sign:
     name: sign and notarize macOS
-    needs: [prepare, build, test]
+    needs: [prepare, build]
     if: inputs.promote == '' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
     timeout-minutes: 45
