@@ -39,7 +39,8 @@ pub(super) struct PlanningState {
     /// start) do not expand. Clear between calls; neither saved nor hashed.
     #[serde(skip)]
     select_expanding: bool,
-    // PlanMgr6375B0's independent event copies (AC4B48), published by637550.
+    // AC4B48: PlanMgr's independent event copies, made inline by 6385C0 at
+    // 638633..6386B5 (the identical 6375B0 has no callers), published by 637550.
     // Detach/capture changes the path, never these already-generated orders.
     // Internal checkpoints retain them; player loads reset the whole planner.
     pending_publication: Vec<CommandRecord>,
@@ -1790,8 +1791,9 @@ impl Simulation {
         if !keep_member {
             self.planning.remove_member(node_id, actor);
         }
-        // PlanMgr6375B0 copies the consumed order into AC4B48. Publication
-        // must read timing later; another event in this DoList can change it.
+        // `0x00638633..0x006386B5` copies the consumed order into AC4B48.
+        // Publication must read timing later; another event in this DoList
+        // can change it.
         self.planning.pending_publication.push(record);
         true
     }
