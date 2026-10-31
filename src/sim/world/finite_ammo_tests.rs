@@ -229,6 +229,81 @@ fn finite_infantry_reloads_and_resumes_fire_only_with_ares() {
     );
 }
 
+/// Infantry5200E1..520105 refills only on a positive-fear turn that reaches
+/// zero. Stock E1's unlimited count bypasses it; the native Scenario reader
+/// admits this finite-magazine map override without an extension.
+#[cfg(not(feature = "ares"))]
+#[test]
+fn finite_infantry_refills_after_damage_fear_expires_and_can_fire_again() {
+    use crate::sim::combat::{EntityDamageEvent, ReceiverCallFlags};
+
+    let Some(mut scene) = Scene::new("[E1]\nAmmo=1\nInitialAmmo=1\nCanPassiveAquire=no\n") else {
+        return;
+    };
+    let target = scene.spawn("GACNST", "Russians", (16, 16));
+    let infantry = scene.spawn("E1", "Americans", (16, 20));
+    let attack = Command::Attack {
+        attacker_id: infantry,
+        target_id: target,
+    };
+    scene.command("Americans", attack.clone());
+    scene.shot(infantry, target);
+    scene.command(
+        "Americans",
+        Command::Stop {
+            entity_id: infantry,
+        },
+    );
+    for _ in 0..3 {
+        scene.frame();
+        assert_eq!(scene.count(infantry), 0, "initial zero fear never refills");
+    }
+    let hit = EntityDamageEvent::direct_receiver(
+        infantry,
+        1,
+        0,
+        target,
+        None,
+        scene.0.simulation.interner.intern("SA"),
+        ReceiverCallFlags {
+            ignore_defenses: false,
+            arg6: false,
+        },
+    );
+    scene.0.simulation.commit_direct_damage_receiver(
+        &scene.0.resources.rules,
+        Some(&scene.0.resources.overlay_registry),
+        hit,
+        FrameEffects::default(),
+    );
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 100);
+    let reload = scene.reload(infantry);
+    for _ in 0..99 {
+        scene.frame();
+        assert_eq!(scene.count(infantry), 0, "positive fear retains empty ammo");
+    }
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 1);
+    scene.frame();
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 0);
+    assert_eq!(
+        scene.count(infantry),
+        1,
+        "fear expiry copies the type's Ammo"
+    );
+    assert_eq!(
+        scene.reload(infantry),
+        reload,
+        "this arm writes no reload clock"
+    );
+    scene.command("Americans", attack);
+    scene.shot(infantry, target);
+    assert_eq!(
+        scene.count(infantry),
+        0,
+        "the next actual FireAt spends the refill"
+    );
+}
+
 #[cfg(feature = "ares")]
 #[test]
 fn ares_weapon_ammo_cost_controls_admission_debit_and_reload() {

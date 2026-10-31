@@ -260,7 +260,7 @@ fn repeated_fear_add(
 }
 
 impl crate::sim::world::Simulation {
-    /// Original `InfantryClass` fear receiver5200B0, called by InfantryAI at
+    /// gamemd.exe `InfantryClass__Fear_Decay_Handler @ 0x005200B0`, called by InfantryAI at
     /// 51BF0B after Foot Process and before FireAtTarget5206B0/sequencer520AE0.
     /// Caller owns survival/warped admission. Returns the existing NULL Scatter
     /// owner's immediate Process bridge-state-change result.
@@ -302,13 +302,33 @@ impl crate::sim::world::Simulation {
                     .expect("retained Infantry runtime")
                     .fear_level -= 1;
             }
-            // REQUIRED SEPARATE MECHANISM:5200E1..520105 reads live
-            // Techno+2FC after fear reaches0, calls the shared IsArmed701120
-            // if Ammo0, and refills from Type+684. The shared Ammo owner now
-            // retains the constructor/chrono count, but this fear refill and
-            // ordinary ground fire debit cycle remain separate. Stock E1's
-            // negative count bypasses this arm. Saved zero-ammo controls
-            // retain its native producer for that lifecycle migration.
+            // InfantryClass__Fear_Decay_Handler @0x005200B0, retail gamemd.exe:
+            //5200E1..520105: only this positive-fear visit reaching zero can refill an empty
+            // armed actor. Copy the current type's signed Ammo; no reload
+            // timer, RNG draw or detach belongs to this arm.
+            let refill = self.substrate.entities.get(id).and_then(|actor| {
+                if actor.infantry.as_ref()?.fear_level != 0 || actor.ammo()?.current() != 0 {
+                    return None;
+                }
+                let object = self.object_type(actor.type_ref(), rules)?;
+                crate::sim::combat::combat_weapon::is_armed(
+                    actor,
+                    object,
+                    &self.substrate.entities,
+                    rules,
+                    &self.interner,
+                )
+                .then_some(object.ammo)
+            });
+            if let Some(type_ammo) = refill {
+                self.substrate
+                    .entities
+                    .get_mut(id)
+                    .expect("retained fear receiver")
+                    .ammo_mut()
+                    .expect("empty Techno ammo was read above")
+                    .refill_empty_from_type(type_ammo);
+            }
             let actor = self
                 .substrate
                 .entities

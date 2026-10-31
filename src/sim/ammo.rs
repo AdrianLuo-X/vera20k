@@ -133,8 +133,9 @@ impl TechnoAmmo {
         self.current = self.max;
     }
 
-    /// BuildingClass::Update43FE8E..43FEB8 copies the current type's Ammo
-    /// when this count is exactly zero. Its caller owns Hospital/Armory gates.
+    /// BuildingClass::Update43FE8E..43FEB8 and Infantry fear5200E1..520105
+    /// copy the current type's Ammo when this count is exactly zero. Each
+    /// caller owns its Hospital/Armory or fear-expiry/IsArmed gates.
     pub(crate) fn refill_empty_from_type(&mut self, type_ammo: i32) {
         if self.current == 0 {
             self.current = type_ammo;
