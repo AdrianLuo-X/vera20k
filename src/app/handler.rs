@@ -434,6 +434,16 @@ impl App {
                 log::error!("Failed to initialize: {:#}", err);
                 if self.spawn_request.is_some() || self.replay_request.is_some() {
                     self.startup_failure = Some(format!("CnCNet initialization failed: {err:#}"));
+                } else if cfg!(not(all(target_arch = "wasm32", target_os = "unknown")))
+                    && self.shell_capture.is_none()
+                    && self.tactical_capture.is_none()
+                {
+                    // A player's launch: say why before the process exits with
+                    // a failure status (`finish_capture`). The browser page
+                    // reports it above.
+                    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+                    crate::app::system_dialog::report_startup_failure(&err);
+                    self.startup_failure = Some(format!("Startup failed: {err:#}"));
                 }
                 if let Some(session) = self.shell_capture.as_mut() {
                     session.fail(format!("shell capture initialization failed: {err:#}"));

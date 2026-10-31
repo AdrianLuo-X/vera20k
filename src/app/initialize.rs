@@ -142,6 +142,41 @@ fn startup_window_projection(
     )
 }
 
+/// What the startup error card says about the player's own files.
+#[derive(Debug, Default)]
+pub(crate) struct StartupFiles {
+    /// The config.toml this launch read, or where a new one belongs.
+    pub(crate) config_file: Option<std::path::PathBuf>,
+    /// Why the launch has no game configuration, when it has none.
+    pub(crate) problem: Option<StartupProblem>,
+}
+
+/// Which of the player's own files stopped startup, so the error card does
+/// not send them looking for game files that are fine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupProblem {
+    /// config.toml could not be read or parsed.
+    ConfigFile,
+    /// The settings folder, VERA.INI or VERARULES.INI could not be prepared;
+    /// the folder, when it is known.
+    Settings(Option<std::path::PathBuf>),
+}
+
+impl StartupProblem {
+    /// Where a failed [`GameConfig::load`] stopped: the file itself, or the
+    /// settings folder it names or defaults to.
+    pub(crate) fn of_config_load(error: &anyhow::Error) -> Self {
+        if error
+            .downcast_ref::<crate::util::config::ConfigFileError>()
+            .is_some()
+        {
+            Self::ConfigFile
+        } else {
+            Self::Settings(None)
+        }
+    }
+}
+
 /// Keep the first actionable failure while still constructing the error-screen state.
 fn startup_asset_or_error<T>(result: Result<T>, error: &mut Option<String>) -> Option<T> {
     match result {
@@ -284,28 +319,44 @@ impl App {
         // dimensions instead of ingesting operator argv/profile screen state.
         let mut main_menu_shell_error = None;
         let mut personal_rules = crate::rules::personal_rules::PersonalRules::default();
-        let game_config = startup_asset_or_error(
-            GameConfig::load().and_then(|config| {
-                let config = match replay_retail_directory {
-                    Some(directory) => config.with_retail_directory(directory.to_owned())?,
-                    None => config,
-                };
+        let mut startup_problem = None;
+        let game_config = GameConfig::load()
+            .and_then(|config| match replay_retail_directory {
+                Some(directory) => config.with_retail_directory(directory.to_owned()),
+                None => Ok(config),
+            })
+            .inspect_err(|error| startup_problem = Some(StartupProblem::of_config_load(error)))
+            .and_then(|config| {
                 if capture_dimensions.is_none() {
-                    crate::app::persistence::profile_file::import_legacy(&config.paths).map_err(
-                        |error| anyhow::Error::new(error).context("Could not prepare VERA.INI"),
-                    )?;
-                    let bytes = crate::app::persistence::rules_profile::load_or_create(
-                        config.paths.settings_dir(),
-                    )
-                    .context("Could not prepare VERARULES.INI")?;
-                    personal_rules =
+                    let prepared = (|| -> Result<crate::rules::personal_rules::PersonalRules> {
+                        crate::app::persistence::profile_file::import_legacy(&config.paths)
+                            .map_err(|error| {
+                                anyhow::Error::new(error).context("Could not prepare VERA.INI")
+                            })?;
+                        let bytes = crate::app::persistence::rules_profile::load_or_create(
+                            config.paths.settings_dir(),
+                        )
+                        .context("Could not prepare VERARULES.INI")?;
                         crate::rules::personal_rules::PersonalRules::from_bytes(&bytes)
-                            .context("Could not read VERARULES.INI")?;
+                            .context("Could not read VERARULES.INI")
+                    })();
+                    match prepared {
+                        Ok(rules) => personal_rules = rules,
+                        Err(error) => {
+                            startup_problem = Some(StartupProblem::Settings(Some(
+                                config.paths.settings_dir().to_owned(),
+                            )));
+                            return Err(error);
+                        }
+                    }
                 }
                 Ok(config)
-            }),
-            &mut main_menu_shell_error,
-        );
+            });
+        let game_config = startup_asset_or_error(game_config, &mut main_menu_shell_error);
+        let startup_files = StartupFiles {
+            config_file: GameConfig::path(),
+            problem: startup_problem,
+        };
         let options_load = select_startup_options_load(
             capture_dimensions,
             &startup_options,
@@ -430,6 +481,7 @@ impl App {
                 window,
                 game_config,
                 main_menu_shell_error,
+                startup_files,
                 personal_rules,
                 options_profile,
                 startup_options,
@@ -454,6 +506,7 @@ impl App {
         window: Arc<Window>,
         game_config: Option<GameConfig>,
         mut main_menu_shell_error: Option<String>,
+        startup_files: StartupFiles,
         personal_rules: crate::rules::personal_rules::PersonalRules,
         options_profile: RetailOptionsProfile,
         startup_options: RetailStartupOptions,
@@ -1057,6 +1110,7 @@ impl App {
                 main_menu_movie_identity: None,
                 main_menu_movie_last_step: Instant::now(),
                 main_menu_shell_error,
+                startup_files,
                 status_screen_drawn: false,
                 shell_first_paint_slide: None,
                 shell_slide_active_shell: None,
