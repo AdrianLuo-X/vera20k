@@ -174,7 +174,6 @@ pub fn is_fear_application_blocked(obj: &ObjectType, entity: &GameEntity) -> boo
 /// InfantryClass::FireAt @0x0051DF60, retail gamemd.exe instructions:
 /// 51DF82..51DFAA, after the base returns a Bullet. This write has no
 /// Fearless/FEARLESS gate; mission queuing remains with the FireAt caller.
-#[cfg(not(feature = "ares"))]
 pub(crate) fn apply_empty_magazine_panic(obj: &ObjectType, entity: &mut GameEntity) -> bool {
     if entity.lifecycle.in_limbo()
         || !obj.fraidycat

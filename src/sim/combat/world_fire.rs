@@ -2099,9 +2099,25 @@ pub(super) fn emit_admitted_fire(
         effects,
     );
     // Concrete class FireAt suffixes follow the base tail, including
-    // LimboLaunch. Infantry panic / Ares reload and Unit's firing counter /
+    // LimboLaunch. Ares reload / Infantry panic and Unit's firing counter /
     // Scalable work stay here for ordinary and direct mission FireAt callers.
-    #[cfg(not(feature = "ares"))]
+    #[cfg(feature = "ares")]
+    if snap.category == EntityCategory::Infantry
+        && weapon.ammo_cost() > 0
+        && let Some(entity) = world.substrate.entities.get_mut(snap.stable_id)
+        && !entity.lifecycle.in_limbo()
+        && let Some(live_type) = world.interner.object_type(entity.type_ref(), rules)
+        && live_type.ammo > 0
+        && entity
+            .ammo()
+            .is_some_and(|ammo| ammo.current() < live_type.ammo)
+    {
+        // Installed Ares InfantryClass_Fire_Ammo10047910, gamemd51DF8C:
+        // after a returned Bullet, start the shared reload clock. The
+        // Weapon Ammo<=0 arm consumes nothing and does not restart it.
+        entity.start_reloading_ammo(live_type, binary_frame as i32);
+    }
+    // Installed Ares 51DF8C returns 0, so this panic follows its reload.
     if snap.category == EntityCategory::Infantry
         && let Some(entity) = world.substrate.entities.get_mut(snap.stable_id)
         && let Some(live_type) = world.interner.object_type(entity.type_ref(), rules)
@@ -2118,22 +2134,6 @@ pub(super) fn emit_admitted_fire(
             entity,
             crate::sim::mission::MissionId::from_known(crate::sim::mission::MissionType::Guard),
         );
-    }
-    #[cfg(feature = "ares")]
-    if snap.category == EntityCategory::Infantry
-        && weapon.ammo_cost() > 0
-        && let Some(entity) = world.substrate.entities.get_mut(snap.stable_id)
-        && !entity.lifecycle.in_limbo()
-        && let Some(live_type) = world.interner.object_type(entity.type_ref(), rules)
-        && live_type.ammo > 0
-        && entity
-            .ammo()
-            .is_some_and(|ammo| ammo.current() < live_type.ammo)
-    {
-        // Installed Ares InfantryClass_Fire_Ammo10047910, gamemd51DF8C:
-        // after a returned Bullet, start the shared reload clock. The
-        // Weapon Ammo<=0 arm consumes nothing and does not restart it.
-        entity.start_reloading_ammo(live_type, binary_frame as i32);
     }
     if snap.category == EntityCategory::Unit {
         // UnitFireAt7413D3..741401: only a nonnull base Bullet return
