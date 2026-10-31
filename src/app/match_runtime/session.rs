@@ -238,6 +238,9 @@ enum NetworkPhase {
         /// spectators while no AI plays: a game with observers has no AI
         /// (`0x5EC9F0`'s TXT_NO_AI_WITH_OBSERVER).
         open_spectators: bool,
+        /// The most players a VERA room seats, its host's Create Game
+        /// choice; the rows past them are spectator rows.
+        player_limit: u8,
     },
     Frozen {
         startup: Arc<crate::app::match_bootstrap::PreparedNetworkStartup>,
@@ -603,6 +606,7 @@ impl MatchSession {
             observer_row,
             several_observers,
             open_spectators: false,
+            player_limit: NETWORK_PLAYER_SLOT_COUNT as u8,
             launch,
             admission,
             vacancies: [NetworkVacancy::Open; NETWORK_PLAYER_SLOT_COUNT],
@@ -1794,20 +1798,48 @@ impl MatchSession {
         self.keep_spectator_row()
     }
 
-    /// The host's own Player choice for a row (`0x005EC9F0`). In a VERA room
-    /// opening a free spectator row keeps one open for spectators, and
-    /// closing the open one stops them.
+    /// The most players the host of a VERA room seats (its Create Game
+    /// choice): the rows under the limit open for players, and past it the
+    /// rows are spectator rows, without an AI.
+    pub(crate) fn set_network_player_limit(&mut self, players: u8) -> anyhow::Result<()> {
+        anyhow::ensure!(self.host, "only the host limits the players");
+        let Some(NetworkSession {
+            phase:
+                NetworkPhase::Setup {
+                    player_limit,
+                    several_observers: true,
+                    ..
+                },
+            ..
+        }) = self.network.as_mut()
+        else {
+            anyhow::bail!("only VERA's rooms limit their players");
+        };
+        *player_limit = players.clamp(2, NETWORK_PLAYER_SLOT_COUNT as u8);
+        let seats = self.network_player_row_limit();
+        for row in 0..NETWORK_PLAYER_SLOT_COUNT as u8 {
+            let kind = match (self.network_display_ai(row), self.network_vacancy(row)) {
+                (Some(_), _) if row >= seats => NetworkRowKind::Closed,
+                (None, Some(NetworkVacancy::Open)) if row >= seats => NetworkRowKind::Closed,
+                (None, Some(NetworkVacancy::Closed | NetworkVacancy::OpenObserver))
+                    if row < seats =>
+                {
+                    NetworkRowKind::Open
+                }
+                _ => continue,
+            };
+            self.set_network_row_kind(row, kind)?;
+        }
+        self.keep_spectator_row()
+    }
+
+    /// The host's own Player choice for a row (`0x005EC9F0`), after which a
+    /// VERA room places its open spectator row again.
     pub(crate) fn choose_network_row_kind(
         &mut self,
         row: u8,
         kind: NetworkRowKind,
     ) -> anyhow::Result<Option<crate::skirmish_launch::SkirmishHumanSlot>> {
-        if self.network_several_observers()
-            && row >= self.network_player_row_limit()
-            && self.network_vacancy(row).is_some()
-        {
-            self.set_network_spectators(kind == NetworkRowKind::OpenObserver)?;
-        }
         let removed = self.set_network_row_kind(row, kind)?;
         self.keep_spectator_row()?;
         Ok(removed)
@@ -2309,21 +2341,31 @@ impl MatchSession {
         maximum_players.min(raw)
     }
 
-    /// Rows admitting players are bounded by the active mode/map capacity.
+    /// Rows admitting players are bounded by the active mode/map capacity,
+    /// and in VERA's rooms by the host's player limit.
     /// The native host-observer row0 exception adds one physical row without
     /// adding a player, up to the active eight/30-slot allocation (all 30 in
     /// VERA's rooms, whose spectator rows follow the players).
     pub(crate) fn network_player_row_limit(&self) -> u8 {
-        let Some(capacity) = self.network_setup_capacity() else {
+        let Some(NetworkPhase::Setup {
+            capacity,
+            player_limit,
+            ..
+        }) = self.network.as_ref().map(|network| &network.phase)
+        else {
             return 0;
         };
+        let capacity = *capacity;
         let allocation = if capacity > 8 || self.network_several_observers() {
             NETWORK_PLAYER_SLOT_COUNT as i32
         } else {
             8
         };
         let extra = i32::from(self.network_observer_row() == Some(0) && capacity < allocation);
-        capacity.saturating_add(extra).clamp(0, allocation) as u8
+        capacity
+            .min(i32::from(*player_limit))
+            .saturating_add(extra)
+            .clamp(0, allocation) as u8
     }
 
     /// `0x005E9510`: no Open player row, including the host-observer row0
@@ -2360,6 +2402,22 @@ impl MatchSession {
             self.network_player_row_limit()
         };
         (0..rows).find(|row| self.network_vacancy(*row) == Some(wanted))
+    }
+
+    /// A joining LAN node's row and role: [`Self::network_free_row`] for
+    /// what it asked. In a VERA room a player who finds every seat taken
+    /// watches while a spectator row is open, and one asking to watch where
+    /// no spectator row is open takes a free seat, as online joiners do.
+    pub(crate) fn network_join_row(&self, observer: bool) -> Option<(u8, bool)> {
+        let other = || {
+            self.network_several_observers()
+                .then(|| self.network_free_row(!observer))
+                .flatten()
+                .map(|row| (row, !observer))
+        };
+        self.network_free_row(observer)
+            .map(|row| (row, observer))
+            .or_else(other)
     }
 
     /// `0x005E95E0`: the nodes, less an observer on the observer row (every
@@ -3344,8 +3402,8 @@ mod tests {
 
     /// No AI plays while anyone watches (`0x5EC9F0`'s
     /// TXT_NO_AI_WITH_OBSERVER): an AI closes the spectator row, and a
-    /// guest asking to watch keeps its seat. The host closes the row and
-    /// opens it again; it follows a spectator who joins and leaves.
+    /// guest asking to watch keeps its seat. A room without spectators
+    /// closes it too; it follows a spectator who joins and leaves.
     #[test]
     fn a_vera_room_closes_its_spectator_row_for_ai_and_the_host() {
         use super::NetworkRowKind;
@@ -3366,13 +3424,9 @@ mod tests {
             .choose_network_row_kind(2, NetworkRowKind::Open)
             .unwrap();
         assert_eq!(observer_rows(&session), [4]);
-        session
-            .choose_network_row_kind(4, NetworkRowKind::Closed)
-            .unwrap();
+        session.set_network_spectators(false).unwrap();
         assert!(observer_rows(&session).is_empty());
-        session
-            .choose_network_row_kind(4, NetworkRowKind::OpenObserver)
-            .unwrap();
+        session.set_network_spectators(true).unwrap();
         assert_eq!(observer_rows(&session), [4]);
         let mut spectator = session.network_setup().unwrap().humans[1].clone();
         spectator.name = "Spectator".into();
@@ -3382,6 +3436,33 @@ mod tests {
         assert_eq!(observer_rows(&session), [5]);
         session.remove_network_participant(index).unwrap();
         assert_eq!(observer_rows(&session), [4]);
+    }
+
+    /// The host's Create Game limit seats that many players on a larger map
+    /// and after a map change. A LAN player who finds every seat taken
+    /// watches, and finds the game full once the room takes no spectators.
+    /// One asking to watch a room without spectators takes a free seat.
+    #[test]
+    fn a_vera_room_seats_its_player_limit_then_lets_joiners_watch() {
+        let mut session = vera_room();
+        let mode = session.network_setup().unwrap().mode.clone();
+        session.set_network_player_limit(3).unwrap();
+        session
+            .select_network_map(mode, "EIGHT.MAP".into(), 8)
+            .unwrap();
+        assert_eq!(session.network_player_row_limit(), 3);
+        assert_eq!(observer_rows(&session), [3]);
+        assert_eq!(session.network_join_row(false), Some((2, false)));
+        session.set_network_spectators(false).unwrap();
+        assert_eq!(session.network_join_row(true), Some((2, false)));
+        session.set_network_spectators(true).unwrap();
+        let mut third = session.network_setup().unwrap().humans[1].clone();
+        third.name = "Third".into();
+        third.raw_slot_index = Some(2);
+        session.add_network_participant(third).unwrap();
+        assert_eq!(session.network_join_row(false), Some((3, true)));
+        session.set_network_spectators(false).unwrap();
+        assert_eq!(session.network_join_row(false), None);
     }
 
     /// A larger map's players take the spectators' rows: they move on past

@@ -2038,6 +2038,16 @@ impl WolCapture {
                             == Some(lobby_ui::CREATE_DIALOG),
                         "Create did not open 0xC3"
                     );
+                    // VERA's Create Game offers its room's limits, from 8
+                    // players with spectators.
+                    ensure!(
+                        Self::lobby(state)?.ui.popup.as_ref().is_some_and(|popup| matches!(
+                            &popup.kind,
+                            lobby_ui::WolPopupKind::Create(create) if create.room.as_ref().map(|room| room.limits)
+                                == Some(crate::ui::room_limits::RoomLimits::default())
+                        )),
+                        "the modern 0xC3 has no Players or Allow spectators"
+                    );
                     self.event(frame, "0xC3 opened (modern)");
                     // The help under Limit Screen Resolution, moved to the
                     // clan row.
@@ -5550,7 +5560,7 @@ impl WolCapture {
             WolTarget::ModernSpectators => {
                 // VERA's room keeps one spectator row open past its players:
                 // the guest who watches takes it and the next opens.
-                use crate::ui::multiplayer_setup::{SetupAction, SetupColumn};
+                use crate::ui::multiplayer_setup::SetupColumn;
                 setup_requests(state);
                 let first = state.match_state.session.network_free_row(true);
                 let requests = choices(state, human.slot.clone(), true);
@@ -5564,45 +5574,29 @@ impl WolCapture {
                     "the guest takes the open spectator row {first:?}: \
                      {observer:?}, then {second:?} {requests:?}"
                 );
-                // The host closes the open row, the last it lists, and opens
-                // it again from the row it then lists after the spectators.
-                for value in [3, 7] {
-                    let last = setup_view(state)?
-                        .combos
-                        .iter()
-                        .filter(|combo| {
-                            SetupColumn::decode(combo.id)
-                                .is_some_and(|(column, _)| column == SetupColumn::Player)
-                        })
-                        .last()
-                        .context("C2 lists no rows")?
-                        .id;
-                    crate::app::shell_network_setup::apply_action(
-                        state,
-                        SetupAction::Select {
-                            control: last,
-                            value,
-                        },
-                    );
-                }
-                // Each change is advertised to the game list (0x78F000).
-                let changed = setup_requests(state);
+                // The room lists only who is in it: the host, then the
+                // spectator, whom the host's menu kicks. Nobody adds an AI
+                // while anyone watches.
+                let listed: Vec<_> = setup_view(state)?
+                    .combos
+                    .iter()
+                    .filter(|combo| {
+                        SetupColumn::decode(combo.id)
+                            .is_some_and(|(column, _)| column == SetupColumn::Player)
+                    })
+                    .map(|combo| {
+                        let values: Vec<_> =
+                            combo.choices.iter().map(|choice| choice.value).collect();
+                        (combo.row, values)
+                    })
+                    .collect();
                 ensure!(
-                    changed.len() == 6
-                        && changed.chunks(3).all(|requests| {
-                            requests
-                                == [
-                                    NetworkSetupRequest::Advertise,
-                                    NetworkSetupRequest::PublishOptions,
-                                    NetworkSetupRequest::PublishRoster,
-                                ]
-                        })
-                        && state.match_state.session.network_free_row(true) == second,
-                    "closing and opening the spectator row: {changed:?}"
+                    listed == [(0, vec![0]), (first.context("spectator row")?, vec![0, 2])],
+                    "the room lists {listed:?}"
                 );
                 self.event(
                     frame,
-                    json!({"spectator rows": [first, second], "guest observes": first}),
+                    json!({"spectator rows": [first, second], "guest observes": first, "listed": [0, first]}),
                 );
             }
             WolTarget::ClanLockout | WolTarget::ClanNoStart | WolTarget::ClanChooseMap => {

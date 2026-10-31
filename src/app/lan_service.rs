@@ -2812,7 +2812,7 @@ fn join_denial(
         && state
             .match_state
             .session
-            .network_free_row(request.observer_request == 1)
+            .network_join_row(request.observer_request == 1)
             .is_none()
     {
         Some(1)
@@ -3040,12 +3040,11 @@ fn confirm_join(
             .is_some();
         if !same_peer {
             let request = request.join_fields().expect("confirmed request");
-            let row = state
+            let (row, observer) = state
                 .match_state
                 .session
-                .network_free_row(request.observer_request == 1)
+                .network_join_row(request.observer_request == 1)
                 .expect("validated row");
-            let observer = request.observer_request == 1;
             let initial = state
                 .frontend
                 .multiplayer_shell_runtime

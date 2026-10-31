@@ -6,33 +6,35 @@ use super::*;
 
 /// Navigate with the normal buttons before resolving a resource control. Its
 /// visible slot is never the participant's absolute row on an extended roster.
+/// `row`'s control on the roster pages, paged to through normal input. A
+/// VERA room lists only who is in it, so a row's place there is not its
+/// index; the search starts from the first page.
 fn setup_control_at_row(
     state: &mut AppState,
     column: SetupColumn,
     row: usize,
 ) -> Result<Option<u16>> {
     use crate::ui::multiplayer_setup::{NEXT_ROWS, PREVIOUS_ROWS, VISIBLE_SETUP_ROWS};
-    for _ in 0..=crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT / VISIBLE_SETUP_ROWS {
+    let pages = crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT / VISIBLE_SETUP_ROWS + 1;
+    for _ in 0..pages {
+        if setup::view(state).context("setup view")?.first_row == 0 {
+            break;
+        }
+        setup_button(state, PREVIOUS_ROWS)?;
+    }
+    for _ in 0..pages {
         let view = setup::view(state).context("setup view")?;
-        if row >= view.row_count {
+        if let Some(combo) = view.combos.iter().find(|combo| {
+            combo.row as usize == row
+                && combo.visible
+                && SetupColumn::decode(combo.id).is_some_and(|(candidate, _)| candidate == column)
+        }) {
+            return Ok(Some(combo.id));
+        }
+        if view.first_row + view.dialog.rows_per_page() >= view.row_count {
             return Ok(None);
         }
-        if row < view.first_row {
-            setup_button(state, PREVIOUS_ROWS)?;
-        } else if row >= view.first_row + view.dialog.rows_per_page() {
-            setup_button(state, NEXT_ROWS)?;
-        } else {
-            return Ok(view
-                .combos
-                .iter()
-                .find(|combo| {
-                    combo.row as usize == row
-                        && combo.visible
-                        && SetupColumn::decode(combo.id)
-                            .is_some_and(|(candidate, _)| candidate == column)
-                })
-                .map(|combo| combo.id));
-        }
+        setup_button(state, NEXT_ROWS)?;
     }
     anyhow::bail!("setup page navigation did not reach the participant")
 }
@@ -956,7 +958,7 @@ impl LiveLanCapture {
                 }
                 self.event(frame, "BB name entered through normal input");
                 if self.host() {
-                    lobby_button(state, crate::ui::lan_shell::CREATE)?;
+                    create_lan_game(state)?;
                     self.phase = Phase::HostSetup;
                 } else {
                     self.phase = Phase::Discover;
@@ -1236,9 +1238,8 @@ impl LiveLanCapture {
     ) -> Result<()> {
         // Use the existing action admission, including current control
         // availability. The isolated profile must allow one open peer.
-        let row_count = setup::view(state).context("host setup view")?.row_count;
         let mut retained_ai = false;
-        for row in 1..row_count {
+        for row in 1..crate::skirmish_launch::NETWORK_PLAYER_SLOT_COUNT {
             if state
                 .match_state
                 .session
