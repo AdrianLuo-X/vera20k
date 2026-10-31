@@ -149,6 +149,8 @@ the asynchronous lobby-to-setup transition. Loading retains the frozen setup,
 so that transition guard does not block loading progress. Row bindings and
 participant membership remain distinct: replacing a human row sends the native
 kick, while its departure removes the admitted participant and endpoint.
+In VERA's rooms the host's own kick also keeps that address and name out for five
+minutes: their joins get the VERA-only denial reason 9, shown as the join ban.
 
 ## Native behavior and deliberate bounds
 

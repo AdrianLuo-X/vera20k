@@ -264,6 +264,9 @@ fn denial_modal(reason: u32, observer: bool) -> Option<&'static str> {
         // VERA direct-client admission extends native version checks with the
         // actual source build and enabled gameplay feature identity.
         8 => Some("VERA20k build or enabled gameplay features differ."),
+        // VERA's rooms: the host kicked this player within five minutes;
+        // the online join ban's text (`0x7A5890`'s 0x80040072).
+        9 => Some("TXT_JOINBAN"),
         _ => None,
     }
 }
@@ -1141,5 +1144,6 @@ mod tests {
         assert_eq!(denial_modal(1, true), Some("TXT_OBSERVER_FULL"));
         assert_eq!(denial_modal(4, false), None);
         assert_eq!(denial_modal(7, false), Some("TXT_SERIAL_DUP"));
+        assert_eq!(denial_modal(9, false), Some("TXT_JOINBAN"));
     }
 }

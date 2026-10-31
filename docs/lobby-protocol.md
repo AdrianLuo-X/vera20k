@@ -81,7 +81,9 @@ Channel: `{id,kind,max_users,users,tournament,flags,game_flags,ping,name,ex_info
 from the creator: 256 when a game has a password, which clients show as a lock and
 ask for before joining, otherwise 0. `max_users` (1–30) from `create` and the host's
 `advertise` is the room's join limit, never below its current members; a join past
-it fails with `room_full`. The other fields are presentation metadata, not authority. `name` identifies a channel uniquely for compatibility with the
+it fails with `room_full`. A host `kick` with `keep_out:true` keeps that player out of
+the room for five minutes, by account and by name without case: their `join` fails
+with 403 `room_kept_out`, which clients show with the join ban's text while staying in the lobby. The other fields are presentation metadata, not authority. `name` identifies a channel uniquely for compatibility with the
 existing shell. Member: `{player_id,name,flags,squad,clan_name,clan_tag}`. Flags bit 0
 is the channel owner, bit 1 voice; the client adds its own local bit 32768. Servers
 set identity and flags from the authenticated membership, never from user payloads.
@@ -116,7 +118,7 @@ Commands and their payloads:
 | `set_locale` | `{locale}` |
 | `buddies` | `{}` |
 | `add_buddy` / `remove_buddy` / `locate` | `{name}` |
-| `kick` | `{name}` |
+| `kick` | `{name,keep_out?}` |
 
 HostOptions is `{launch,map_metadata,vacancies,observer_row,cooperative_difficulty,seed}`.
 Generated maps add `random_map:{start_staging,preview:{source_sha256,byte_length}}`.

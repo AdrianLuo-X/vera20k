@@ -1610,7 +1610,11 @@ fn request_setup(
             cancel_pending(state, service);
             service.begin_leave(Instant::now());
         }
-        NetworkSetupRequest::Kick { name } => service.command("kick", json!({"name":name})),
+        // Older lobbies take no keep_out, so only a host's own kick sends it.
+        NetworkSetupRequest::Kick { name, keep_out } if keep_out => {
+            service.command("kick", json!({"name":name,"keep_out":true}))
+        }
+        NetworkSetupRequest::Kick { name, .. } => service.command("kick", json!({"name":name})),
         NetworkSetupRequest::Advertise => {
             if let Some(channel) = super::lobby::republish_channel(state) {
                 service.command("advertise", json!({"channel":wire::Channel::from(channel)}));
