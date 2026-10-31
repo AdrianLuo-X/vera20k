@@ -9,8 +9,11 @@ its signature is verified again after that copy.
 
 The `macos-signing` GitHub environment must allow **only the exact `main` branch**
 through its deployment branch policy. A condition inside workflow YAML is not a
-replacement for this server-side restriction. No required reviewer is needed for
-automatic nightlies. Do not add Apple secrets to repository scope or the build job.
+replacement for this server-side restriction. Its required reviewer is the
+maintainer: every job that uses it, in nightlies and `macos-signing-check.yml`
+too, waits until the maintainer approves it on the run's page, so a run nobody
+approved never sees the Apple secrets. Approve only a run you asked for. Do not
+add Apple secrets to repository scope or the build job.
 
 The environment holds:
 

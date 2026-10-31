@@ -32,7 +32,11 @@ disabled (`gh workflow list --all` shows its state). By hand:
 
 1. `gh workflow run release.yml --ref main -f publish=prerelease`; `draft` to look before
    publishing, `none` to only build and test.
-2. Wait with one background `gh run watch <run> --exit-status`.
+2. After the builds, its `sign and notarize macOS` job waits in the `macos-signing`
+   environment until the maintainer approves it on the run's page (Review deployments); a
+   nightly's does too. Tell the maintainer when you start the run, and don't approve it
+   yourself.
+3. Wait with one background `gh run watch <run> --exit-status`.
 
 ## Release
 
