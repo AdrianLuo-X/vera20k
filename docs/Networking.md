@@ -128,6 +128,9 @@ accepted launch and replays the production frame transaction without connecting
 to the lobby. Startup version, rules, map bytes, seed and initial state must match;
 recorded state hashes are checked during playback. Generated maps, campaigns and
 restored mid-match segments currently lack standalone replay startup.
+Replay version 4 regenerates shared planning events through the simulation at
+their original frame phases. Earlier JSON logs remain readable for inspection;
+playback requires the current version to avoid executing old internal events twice.
 
 | Responsibility | Authoritative owner |
 |---|---|
