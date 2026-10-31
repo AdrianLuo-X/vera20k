@@ -1226,9 +1226,27 @@ pub(crate) fn open(state: &mut AppState) {
         Ok(service) => state.match_state.lan_service = Some(service),
         Err(error) => {
             log::error!("LAN socket initialization failed: {error}");
-            super::shell_lan::report_error(state, "TXT_UNABLE_TO_CONNECT");
+            report_ports_unavailable(state);
         }
     }
+}
+
+/// The LAN visit could not open its sockets, so nothing it shows works.
+/// Capture drivers run without sockets on purpose.
+pub(crate) fn unavailable(state: &AppState) -> bool {
+    state.match_state.lan_service.is_none() && state.platform.capture_client_size.is_none()
+}
+
+/// Why the LAN lobby cannot host or join: its ports are taken.
+pub(crate) fn report_ports_unavailable(state: &mut AppState) {
+    super::shell_lan::report_error(
+        state,
+        if state.frontend.native_shell_ui {
+            "TXT_UNABLE_TO_CONNECT"
+        } else {
+            "Could not open the LAN network ports (UDP 1234 and 1236). Another program, perhaps another copy of VERA20k, may be using them. Close it, then try again."
+        },
+    );
 }
 
 /// The online control plane admits identity and the immutable roster. Once

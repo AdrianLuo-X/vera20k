@@ -1246,6 +1246,17 @@ pub(crate) fn cancel_network_loading(state: &mut AppState, text: &str) -> bool {
         LoadingFailurePolicy::RetryNetworkShell,
         anyhow::anyhow!(text.to_owned()),
     );
+    // The failure has reopened the lobby. Native returns without a word;
+    // VERA's lobbies say why the load stopped.
+    if !state.frontend.native_shell_ui && !state.frontend.external_launch {
+        crate::app::shell_lan::append_chat(
+            state,
+            crate::ui::lan_shell::LanChatLine {
+                text: text.encode_utf16().collect(),
+                color: u32::MAX,
+            },
+        );
+    }
     true
 }
 
