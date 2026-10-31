@@ -33,7 +33,7 @@ class MacNotarizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, fixture, clear=True):
             root = Path(temporary)
             with patch.object(notarize.ctypes, "CDLL", side_effect=[security, core]), \
-                 patch.object(notarize, "command", side_effect=['"login.keychain-db"', "", ""]) as command:
+                 patch.object(notarize, "command", side_effect=["", '"login.keychain-db"', "", ""]) as command:
                 with self.assertRaisesRegex(RuntimeError, "signing failed"):
                     with notarize.signing_keychain(root) as keychain:
                         self.assertEqual(keychain.stat().st_mode & 0o777, 0o600)

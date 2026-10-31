@@ -58,6 +58,9 @@ def signing_keychain(directory: Path):
         if status:
             raise RuntimeError(f"Cannot unlock signing keychain: OSStatus {status}")
         del password
+        # The copied keychain may normally lock after five minutes. Keep only
+        # this disposable CI copy unlocked beyond the bounded notary wait.
+        command(["security", "set-keychain-settings", "-lut", "3600", str(path)])
         original = shlex.split(command(["security", "list-keychains", "-d", "user"]))
         command(["security", "list-keychains", "-d", "user", "-s", *original, str(path)])
         yield path
