@@ -4,6 +4,8 @@ Dev builds run from `main`. The build job creates an ad-hoc-signed staging image
 the separate `macos-sign` job signs its app with Developer ID, notarizes its final
 disk image, staples the ticket and verifies it. Updater tests and publication use
 only that final image. Stable promotion reuses its exact bytes.
+The app is signed in a normal staging folder and then copied back onto the image;
+its signature is verified again after that copy.
 
 The `macos-signing` GitHub environment must allow **only the exact `main` branch**
 through its deployment branch policy. A condition inside workflow YAML is not a
