@@ -1039,6 +1039,27 @@ pub(super) fn message_box_text(state: &AppState, body: String, yes_no: bool) -> 
 
 /// A live-service refusal whose reason no CSF label carries: the box its
 /// failure opened shows `body` instead. False when no box is open.
+/// A VERA-specific box over the WOL welcome, which returns to it. False
+/// outside the welcome.
+pub(super) fn show_text_box(state: &mut AppState, body: &str) -> bool {
+    if state.frontend.shell_route != crate::app::shell_route::ShellRoute::Wol {
+        return false;
+    }
+    let message = message_box_text(state, body.to_owned(), false);
+    let dialog = message.dialog();
+    let Some(visit) = state.frontend.wol.as_mut() else {
+        return false;
+    };
+    visit.status_help = None;
+    visit.page = WolPage::Message {
+        message,
+        then: WolBoxThen::Welcome,
+    };
+    state.frontend.shell_controller.reset_to(dialog, false);
+    state.platform.window.request_redraw();
+    true
+}
+
 pub(super) fn replace_open_box_body(state: &mut AppState, body: &str) -> bool {
     match state.frontend.wol.as_mut().map(|visit| &mut visit.page) {
         Some(WolPage::Message { message, .. }) => {

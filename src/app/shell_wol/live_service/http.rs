@@ -62,6 +62,9 @@ pub(super) enum Request {
         attempt: u64,
         nickname: String,
     },
+    /// The shell gave up on an unanswering lobby outside a match: stop
+    /// polling and log this bearer out at the next sign-in.
+    Abandon,
     /// An external launch's bearer for its match API (docs/spawn.md), in
     /// place of `/v1/sessions`. Polling starts with the first event.
     AdoptSession {
@@ -195,6 +198,14 @@ pub(super) enum Response {
     LobbyUnreachable,
     /// An event poll succeeded again after `LobbyUnreachable`.
     LobbyReachable,
+    /// About a minute of failed polls outside a match: polling stopped.
+    LobbyLost,
+    /// 503 `maintenance` to a sign-in, with the lobby's message when it
+    /// gave a plain one.
+    Maintenance {
+        attempt: u64,
+        message: Option<String>,
+    },
     StartRejected {
         id: u64,
         /// 429, 5xx or no answer: the lobby, not the setup, refused it.
@@ -224,6 +235,9 @@ const MAX_CLEANUP_DRAIN_BATCHES: usize = 8;
 const SPAWNED_MATCH_POLL: Duration = Duration::from_secs(60);
 // About three lines of the 0xD0 box body, which also holds the download link.
 const MAX_UPGRADE_MESSAGE_CHARS: usize = 160;
+// The failed polls, 2+4+8+16+30 s apart, after which a player outside a
+// match is told the lobby connection was lost: about a minute.
+const LOBBY_LOST_POLLS: u8 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RequestFailure {
@@ -237,6 +251,22 @@ enum RequestFailure {
     /// 426 `upgrade_required` (docs/lobby-protocol.md), with the lobby's
     /// message when it is one short line of plain text.
     UpgradeRequired(Option<String>),
+    /// 503 `maintenance`: the operator closed sign-ins, with the same kind
+    /// of message.
+    Maintenance(Option<String>),
+}
+
+/// The lobby's `error.message` when it is one short line of plain text.
+fn plain_message(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(|value| value["error"]["message"].as_str())
+        .map(str::trim)
+        .filter(|message| {
+            !message.is_empty()
+                && message.chars().count() <= MAX_UPGRADE_MESSAGE_CHARS
+                && !message.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,18 +311,10 @@ impl RequestFailure {
                 code: 0x8004_0070,
             },
             Some("unknown_match") if status == 409 => Self::AlreadyFinished,
-            _ if status == 426 => Self::UpgradeRequired(
-                value
-                    .as_ref()
-                    .and_then(|value| value["error"]["message"].as_str())
-                    .map(str::trim)
-                    .filter(|message| {
-                        !message.is_empty()
-                            && message.chars().count() <= MAX_UPGRADE_MESSAGE_CHARS
-                            && !message.chars().any(char::is_control)
-                    })
-                    .map(str::to_owned),
-            ),
+            Some("maintenance") if status == 503 => {
+                Self::Maintenance(plain_message(value.as_ref()))
+            }
+            _ if status == 426 => Self::UpgradeRequired(plain_message(value.as_ref())),
             _ => Self::Status(status),
         }
     }
@@ -311,6 +333,7 @@ impl RequestFailure {
             Self::Status(status) | Self::ChannelRejected { status, .. } => *status,
             Self::LostCursor | Self::AlreadyFinished => 409,
             Self::UpgradeRequired(_) => 426,
+            Self::Maintenance(_) => 503,
         }
     }
 }
@@ -328,6 +351,9 @@ struct Client {
     active_match: Option<String>,
     /// The bearer came from an external launcher, not `/v1/sessions`.
     spawned: bool,
+    /// The lobby stopped answering and the player was told the connection
+    /// was lost: no more polls; the next sign-in logs this bearer out first.
+    abandoned: bool,
 }
 
 fn decode_session(value: Value, requested_nickname: &str) -> Result<Session, RequestFailure> {
@@ -424,7 +450,9 @@ impl Client {
     /// The bearer a new stream opens with. A spawned match only needs events
     /// during its start barrier, which polls cover, so it opens none.
     fn stream_bearer(&self) -> Option<&str> {
-        self.token.as_deref().filter(|_| !self.spawned)
+        self.token
+            .as_deref()
+            .filter(|_| !self.spawned && !self.abandoned)
     }
 
     /// A stream frame starts at the stream's own cursor, which command
@@ -511,6 +539,7 @@ fn spawn_translator(
         cursor: 0,
         active_match: None,
         spawned: false,
+        abandoned: false,
     };
     let output = output.clone();
     std::thread::Builder::new()
@@ -551,6 +580,7 @@ pub(super) fn run(
         cursor: 0,
         active_match: None,
         spawned: false,
+        abandoned: false,
     };
     let translator = spawn_translator(&client, &output);
     run_loop(client, input, output, translator);
@@ -651,6 +681,11 @@ macro_rules! serial_driver {
                     let _ = output.send(Response::LobbyUnreachable);
                 }
                 *failed_polls = failed_polls.saturating_add(1);
+                // From about a minute on, each failed poll asks the shell,
+                // which gives up (`Request::Abandon`) unless a match is on.
+                if *failed_polls >= LOBBY_LOST_POLLS && !self.spawned && !self.abandoned {
+                    let _ = output.send(Response::LobbyLost);
+                }
                 Duration::from_secs((1u64 << (*failed_polls).min(5)).min(30))
             }
         }
@@ -849,6 +884,28 @@ macro_rules! serial_driver {
                 let _ = output.send(response);
             }
             Some(Request::OpenSession { attempt, nickname }) => {
+                // A bearer given up in an outage still holds its name: log it
+                // out first, and while the lobby is still away, report that.
+                if client.abandoned {
+                    // The lobby refuses to log out a session in a match, so
+                    // a match the shell already left is finished first.
+                    if let Some(match_id) = client.active_match.clone() {
+                        let body = json!({"request_id":"abandoned-finish","after":client.cursor,"operation":"finish","payload":{"match_id":match_id}});
+                        let _ = platform_await!(client.request("/v1/commands", Some(&body)));
+                        client.active_match = None;
+                    }
+                    let body = json!({"request_id":"abandoned-logout","after":client.cursor,"operation":"logout","payload":{}});
+                    match platform_await!(client.request("/v1/commands", Some(&body))) {
+                        Ok(_) | Err(RequestFailure::Status(401)) => {
+                            client.token = None;
+                            client.abandoned = false;
+                        }
+                        Err(_) => {
+                            let _ = output.send(Response::LoginFailed { attempt, code: 0 });
+                            continue;
+                        }
+                    }
+                }
                 // A new username cannot prove ownership of an old bearer.
                 // The service's existing cleanup gate must retire it first.
                 if client.token.is_some() {
@@ -900,11 +957,15 @@ macro_rules! serial_driver {
                     Err(RequestFailure::UpgradeRequired(message)) => {
                         let _ = output.send(Response::UpgradeRequired { attempt, message });
                     }
+                    Err(RequestFailure::Maintenance(message)) => {
+                        let _ = output.send(Response::Maintenance { attempt, message });
+                    }
                     Err(_) => {
                         let _ = output.send(Response::LoginFailed { attempt, code: 0 });
                     }
                 }
             }
+            Some(Request::Abandon) => client.abandoned = client.token.is_some(),
             Some(Request::AdoptSession { token }) => {
                 if client.token.is_none() {
                     client.adopt_session(token);
@@ -998,6 +1059,7 @@ macro_rules! serial_driver {
                 }
                 if operation == "logout" && completed {
                     client.token = None;
+                    client.abandoned = false;
                 }
             }
             Some(Request::Translate { id, text, target }) => {
@@ -1016,7 +1078,7 @@ macro_rules! serial_driver {
         }
         #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
         let streaming = {
-            while let Some(frame) = streams.next(client.token.as_deref()) {
+            while let Some(frame) = streams.next(client.stream_bearer()) {
                 // A bad frame ends the stream; the next poll asks again.
                 if client.streamed(frame, &output).is_err() {
                     streams.close();
@@ -1031,7 +1093,7 @@ macro_rules! serial_driver {
         };
         #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
         let streaming = false;
-        if client.token.is_some() && !streaming && Instant::now() >= next_poll {
+        if client.token.is_some() && !client.abandoned && !streaming && Instant::now() >= next_poll {
             let result = platform_await!(client
                 .request(&format!("/v1/events?after={}", client.cursor), None))
                 .and_then(|value| client.batch(value, &output));
@@ -1176,6 +1238,40 @@ mod tests {
         );
     }
 
+    /// From about a minute of failed polls on, each failed poll asks the
+    /// shell to give up, until it does; then the bearer stays for the next
+    /// sign-in and no stream reopens.
+    #[test]
+    fn a_lobby_lost_for_a_minute_asks_the_shell_until_it_gives_up() {
+        let (output, input) = std::sync::mpsc::channel();
+        let mut client = Client {
+            stopping: Arc::new(AtomicBool::new(false)),
+            agent: ureq::Agent::new_with_defaults(),
+            base: String::new(),
+            token: Some("synthetic-test-session".to_owned()),
+            cursor: 19,
+            active_match: None,
+            spawned: false,
+            abandoned: false,
+        };
+        let outage = |client: &mut Client, failures: &mut u8, polls| {
+            for _ in 0..polls {
+                client.poll_finished(Err(RequestFailure::Status(0)), failures, &output);
+            }
+            input
+                .try_iter()
+                .filter(|response| matches!(response, Response::LobbyLost))
+                .count()
+        };
+        let mut failures = 0;
+        assert_eq!(outage(&mut client, &mut failures, LOBBY_LOST_POLLS - 1), 0);
+        // A shell in a match ignores these, so they keep coming after it.
+        assert_eq!(outage(&mut client, &mut failures, 2), 2);
+        client.abandoned = true;
+        assert_eq!(outage(&mut client, &mut failures, 1), 0);
+        assert!(client.token.is_some() && client.stream_bearer().is_none());
+    }
+
     #[test]
     fn transient_poll_failure_preserves_session_and_cursor_until_definitive_unauthorized() {
         let (output, input) = std::sync::mpsc::channel();
@@ -1187,6 +1283,7 @@ mod tests {
             cursor: 19,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         let mut failures = 0;
         assert_eq!(
@@ -1206,6 +1303,7 @@ mod tests {
         );
         assert!(client.token.is_some());
         assert_eq!(client.cursor, 19);
+        assert!(matches!(input.try_recv(), Ok(Response::LobbyLost)));
         assert!(input.try_recv().is_err());
         assert_eq!(
             client.poll_finished(Ok(()), &mut failures, &output),
@@ -1265,6 +1363,7 @@ mod tests {
             cursor: 19,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         let conflict = RequestFailure::response(
             409,
@@ -1309,6 +1408,17 @@ mod tests {
             RequestFailure::response(426, b"not json"),
             RequestFailure::UpgradeRequired(None)
         );
+        assert_eq!(
+            RequestFailure::response(
+                503,
+                br#"{"error":{"code":"maintenance","message":"Back at 20:30 UTC."}}"#
+            ),
+            RequestFailure::Maintenance(Some("Back at 20:30 UTC.".into()))
+        );
+        assert_eq!(
+            RequestFailure::response(503, br#"{"error":{"code":"service_unavailable"}}"#),
+            RequestFailure::Status(503)
+        );
 
         let (output, input) = std::sync::mpsc::channel();
         let mut client = Client {
@@ -1319,6 +1429,7 @@ mod tests {
             cursor: 19,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         assert!(!client.session_failed(refused(reason), &output));
         assert!(client.token.is_some());
@@ -1339,6 +1450,7 @@ mod tests {
             cursor: 0,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         let response = json!({"cursor":2,"events":[
             {"sequence":1,"kind":"created","payload":{}},
@@ -1377,6 +1489,7 @@ mod tests {
             cursor: 5,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         let event = |sequence| json!({"sequence":sequence,"kind":"chat","payload":{}});
         client
@@ -1414,6 +1527,7 @@ mod tests {
             cursor: 0,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         let mut failures = 0;
 
@@ -1454,6 +1568,7 @@ mod tests {
             cursor: 19,
             active_match: None,
             spawned: false,
+            abandoned: false,
         };
         client
             .batch(
