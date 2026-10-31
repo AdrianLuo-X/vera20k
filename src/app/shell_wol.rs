@@ -39,6 +39,7 @@ pub(crate) use live_service::{
 };
 pub(crate) use live_service::{
     local_choices_agreed, online_cleanup_pending, online_exit_ready, online_match_id,
+    retire_visit_for_exit,
 };
 pub(crate) use login::{combo_popup, login_layout, open_login_art};
 pub(crate) use service::{

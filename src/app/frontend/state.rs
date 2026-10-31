@@ -23,6 +23,9 @@ pub(crate) struct FrontendState {
     pub(crate) external_match_result: Option<crate::app::cncnet::ExternalMatchResult>,
     /// Frames, duration and opponent departure for the launch report.
     pub(crate) external_progress: crate::app::cncnet::ExternalLaunchProgress,
+    /// The game is closing and waits until this for its network goodbyes
+    /// (`App::poll_network_goodbye`).
+    pub(crate) network_goodbye_deadline: Option<crate::util::time::Instant>,
     /// Browser launch is closing its network owners before engine exit.
     #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
     pub(crate) browser_exit_pending: bool,

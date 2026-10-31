@@ -1143,6 +1143,19 @@ pub(super) fn leave_visit(state: &mut AppState) {
     state.frontend.wol_account.password.clear();
 }
 
+/// The game is closing: hand the online visit to the ordinary cleanup owner
+/// (finish, leave, logout and the relay departure), as Back does.
+pub(crate) fn retire_visit_for_exit(state: &mut AppState) {
+    if state
+        .frontend
+        .wol
+        .as_ref()
+        .is_some_and(|visit| visit.provider == WolProvider::Online)
+    {
+        leave_visit(state);
+    }
+}
+
 fn request_service(state: &mut AppState, service: &mut LiveService, request: WolServiceRequest) {
     match request {
         WolServiceRequest::EnsureApi => {

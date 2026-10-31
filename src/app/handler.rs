@@ -518,6 +518,14 @@ impl ApplicationHandler for App {
             }
             return;
         }
+        // The hidden window only waits for its network goodbyes to finish.
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| state.frontend.network_goodbye_deadline.is_some())
+        {
+            return;
+        }
         let shell_capture_active = self.shell_capture.is_some();
         let tactical_capture_active = self.tactical_capture.is_some();
         // Set while this call re-dispatches a touch's mouse events: those carry
@@ -855,6 +863,10 @@ impl ApplicationHandler for App {
                     );
                     Self::teardown_skirmish_shell_for_start(state);
                     state.frontend.multiplayer_shell_runtime.persist_snapshot();
+                }
+                #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+                if Self::begin_network_goodbye(state) {
+                    return;
                 }
                 event_loop.exit();
             }
@@ -1734,6 +1746,9 @@ impl ApplicationHandler for App {
         let shell_scroll_wake = if let Some(state) = self.state.as_mut() {
             #[cfg(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown"))]
             if Self::poll_browser_exit(state, event_loop) {
+                return;
+            }
+            if Self::poll_network_goodbye(state, event_loop) {
                 return;
             }
             Self::follow_window_full_screen(state);
