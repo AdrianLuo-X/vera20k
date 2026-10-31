@@ -305,7 +305,9 @@ impl crate::sim::world::Simulation {
             // InfantryClass__Fear_Decay_Handler @0x005200B0, retail gamemd.exe:
             //5200E1..520105: only this positive-fear visit reaching zero can refill an empty
             // armed actor. Copy the current type's signed Ammo; no reload
-            // timer, RNG draw or detach belongs to this arm.
+            // timer, RNG draw or detach belongs to this arm. Installed Ares
+            // InfantryClass_UpdatePanic_DontReload (5200D7) resumes at 52010B.
+            #[cfg(not(feature = "ares"))]
             let refill = self.substrate.entities.get(id).and_then(|actor| {
                 if actor.infantry.as_ref()?.fear_level != 0 || actor.ammo()?.current() != 0 {
                     return None;
@@ -320,6 +322,7 @@ impl crate::sim::world::Simulation {
                 )
                 .then_some(object.ammo)
             });
+            #[cfg(not(feature = "ares"))]
             if let Some(type_ammo) = refill {
                 self.substrate
                     .entities
