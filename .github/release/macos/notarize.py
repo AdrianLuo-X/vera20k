@@ -132,9 +132,14 @@ def notarize(image: Path, output: Path, records: Path, identity: str, team: str,
             command(["hdiutil", "convert", str(image), "-format", "UDRW", "-o", str(writable)])
             command(["hdiutil", "attach", "-nobrowse", "-readwrite", "-mountpoint", str(mount), str(writable)])
             try:
-                app = mount / "VERA20K.app"
-                if app.is_symlink() or not (app / "Contents/MacOS/VERA20K").is_file():
+                image_app = mount / "VERA20K.app"
+                if image_app.is_symlink() or not (image_app / "Contents/MacOS/VERA20K").is_file():
                     raise RuntimeError("The disk image does not contain the expected VERA20K app.")
+                # Sign on the runner's native filesystem, then package the sealed
+                # bundle. Updating a Mach-O signature on the mounted image can
+                # fail in the Code Signing subsystem even when the key works.
+                app = work / "VERA20K.app"
+                command(["ditto", str(image_app), str(app)])
                 command(["codesign", "--force", "--options", "runtime", "--timestamp", "--sign", identity,
                          "--keychain", str(keychain), str(app)])
                 command(["codesign", "--verify", "--strict", "--verbose=2", str(app)])
@@ -142,6 +147,9 @@ def notarize(image: Path, output: Path, records: Path, identity: str, team: str,
                                          capture_output=True, text=True, check=True).stderr
                 if f"TeamIdentifier={team}" not in details or "(runtime)" not in details or "Timestamp=" not in details:
                     raise RuntimeError("The app lacks the expected team, hardened runtime or secure timestamp.")
+                shutil.rmtree(image_app)
+                command(["ditto", str(app), str(image_app)])
+                command(["codesign", "--verify", "--strict", str(image_app)])
             finally:
                 command(["hdiutil", "detach", str(mount)])
             command(["hdiutil", "convert", str(writable), "-format", "UDZO", "-o", str(output)])
