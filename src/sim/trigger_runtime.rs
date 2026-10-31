@@ -2284,6 +2284,12 @@ impl Simulation {
     /// revisits the slot after a successful raise (6E9312). Both broadcast
     /// before destroying the empty leaving Team. No own RNG draws, timers
     /// or detach: ordinary Register/Reset/actions own those effects.
+    ///
+    /// A true one-shot raise destroys a Trigger, so its revisits end. Residual:
+    /// Rust revisits a repeating Tag only when the raise shifted another Tag
+    /// into the slot. Natively that revisit never ends while one of its
+    /// Triggers keeps occurring, and it can first spring a sibling Trigger
+    /// that Rust drops.
     pub(crate) fn raise_team_left_map_tags(
         &mut self,
         order: TeamTagOrder,
@@ -2298,6 +2304,9 @@ impl Simulation {
         let mut effects = Vec::new();
         while let Some(slot) = ordinal {
             if let Some(&tag) = self.trigger_runtime.tag_order.get(slot) {
+                let repeating = self.trigger_runtime.tag(tag).is_some_and(|live| {
+                    self.trigger_runtime.definitions.tag_types[live.type_index].repeat == 2
+                });
                 let raised = self.dispatch_live_tag_event(
                     tag,
                     TagEventInput {
@@ -2312,7 +2321,10 @@ impl Simulation {
                 if raised && self.trigger_runtime.tag_order.is_empty() {
                     break;
                 }
-                if raised && order == TeamTagOrder::Forward {
+                if raised
+                    && order == TeamTagOrder::Forward
+                    && (!repeating || self.trigger_runtime.tag_order.get(slot) != Some(&tag))
+                {
                     continue;
                 }
             } else if order == TeamTagOrder::Forward {

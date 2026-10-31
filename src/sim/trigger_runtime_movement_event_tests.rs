@@ -613,6 +613,7 @@ fn fourteen_original_near_waypoint_distance_controls_reuse_the_numeric_owner() {
 
 fn retail_infantry_map_event(
     required_members: u32,
+    clear_repeat: u8,
 ) -> Option<(
     Simulation,
     RuleSet,
@@ -641,11 +642,11 @@ fn retail_infantry_map_event(
             "[TeamTypes]\n0=MATCH\n[MATCH]\nName=MATCH\nScript=WAIT\nTaskForce=INFANTRY\n\
              [ScriptTypes]\n0=WAIT\n[WAIT]\n0=5,999\n\
              [TaskForces]\n0=INFANTRY\n[INFANTRY]\n0={required_members},E1\n\
-             [Triggers]\nMOVE=Americans,<none>,Move,0,1,1,1,0\nCLEAR=Americans,<none>,Clear,0,1,1,1,0\n\
-             [Tags]\nMOVETAG=0,Move,MOVE\nCLEARTAG=0,Clear,CLEAR\n\
-             [Events]\nMOVE=1,23,1,MATCH\nCLEAR=1,23,1,MATCH\n\
+             [Triggers]\nMOVE=Americans,<none>,Move,0,1,1,1,0\nCLEAR=Americans,LATE,Clear,0,1,1,1,0\nLATE=Americans,<none>,Late,0,1,1,1,0\n\
+             [Tags]\nMOVETAG=0,Move,MOVE\nCLEARTAG={clear_repeat},Clear,CLEAR\n\
+             [Events]\nMOVE=1,23,1,MATCH\nCLEAR=1,23,1,MATCH\nLATE=1,28,0,7\n\
              [Actions]\nMOVE=3,28,0,7,0,0,0,0,A,28,0,8,0,0,0,0,A,70,3,MOVETAG,0,0,0,0,A\n\
-             CLEAR=1,29,0,7,0,0,0,0,A\n"
+             CLEAR=1,29,0,7,0,0,0,0,A\nLATE=1,28,0,9,0,0,0,0,A\n"
         ),
     );
     sim.install_team_ai_registry(
@@ -675,7 +676,7 @@ fn add_infantry_map_event_team(sim: &mut Simulation, rules: &RuleSet, actor: u64
 /// Recalc walks backwards: CLEAR runs before MOVE, leaving global7 set.
 #[test]
 fn infantry_ai_enables_empty_team_map_action() {
-    let Some((mut sim, rules, registry)) = retail_infantry_map_event(1) else {
+    let Some((mut sim, rules, registry)) = retail_infantry_map_event(1, 0) else {
         return;
     };
     let (move_tag, _) = tag(&mut sim, "MOVETAG");
@@ -729,14 +730,12 @@ fn infantry_ai_enables_empty_team_map_action() {
 }
 
 /// TeamAI6E92D0..6E9320 walks forwards and revisits a slot after a raise
-/// returns true. MOVE deletes itself; CLEAR must still run after it.
-#[test]
-fn infantry_map_event_survives_unfilled_team_timeout_and_tag_compaction() {
+/// returns true. MOVE deletes itself; CLEAR must still run after it. CLEAR's
+/// linked LATE is checked first and waits on CLEAR's action.
+fn dissolve_unfilled_infantry_team(clear_repeat: u8) -> Option<(Simulation, usize, usize)> {
     use crate::sim::combat::{EntityDamageEvent, RAD_NO_ATTACKER, ReceiverCallFlags};
 
-    let Some((mut sim, rules, registry)) = retail_infantry_map_event(2) else {
-        return;
-    };
+    let (mut sim, rules, registry) = retail_infantry_map_event(2, clear_repeat)?;
     let (move_tag, _) = tag(&mut sim, "MOVETAG");
     let (clear_tag, _) = tag(&mut sim, "CLEARTAG");
     let actor = sim
@@ -785,9 +784,38 @@ fn infantry_map_event_survives_unfilled_team_timeout_and_tag_compaction() {
         "CLEAR follows MOVE despite MOVE deleting its own Tag"
     );
     assert!(sim.team_script_vm.team(id).is_none());
+    Some((sim, move_tag, clear_tag))
+}
+
+#[test]
+fn infantry_map_event_survives_unfilled_team_timeout_and_tag_compaction() {
+    let Some((mut sim, move_tag, clear_tag)) = dissolve_unfilled_infantry_team(0) else {
+        return;
+    };
+    assert!(
+        sim.trigger_runtime.globals_set.contains(&9),
+        "the revisit of the fired one-shot Tag springs LATE"
+    );
     sim.flush_pending_delete();
     assert!(sim.trigger_runtime.tag(move_tag).is_none());
     assert!(sim.trigger_runtime.tag(clear_tag).is_none());
+}
+
+/// Native 6E9312 re-raises a repeating Tag left in the revisited slot
+/// forever; the walk raises it once and ends.
+#[test]
+fn forward_team_walk_raises_a_repeating_tag_once() {
+    let Some((mut sim, _, clear_tag)) = dissolve_unfilled_infantry_team(2) else {
+        return;
+    };
+    let raises = sim
+        .tag_dispatch_trace_for_test()
+        .iter()
+        .filter(|&&raise| raise == (clear_tag, 23))
+        .count();
+    assert_eq!(raises, 1);
+    sim.flush_pending_delete();
+    assert!(sim.trigger_runtime.tag(clear_tag).is_some());
 }
 
 #[test]
