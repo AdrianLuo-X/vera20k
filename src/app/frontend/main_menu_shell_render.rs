@@ -27,6 +27,7 @@ use crate::ui::main_menu_shell::{
     MainMenuControlId, MainMenuMovieBase, MainMenuShellLayout, csf_key_for_control,
     tooltip_csf_key_for_control,
 };
+use crate::ui::shell::geom::RectPx;
 use crate::ui::shell::geom::{SDBTNANM_CELL_H, SDBTNANM_CELL_W_NARROW};
 use crate::ui::shell::static_reveal::{Kind1PaintWindow, Kind1RevealReceipt, Kind1RevealWindow};
 
@@ -217,9 +218,15 @@ fn main_menu_paint_labels<'a>(
             path_a_reveal: Some(shell_reveal_path_a(window)),
         });
     }
+    // VERA difference: the release sits on the status line's baseline rather
+    // than gamemd's version-line top, so the two bottom texts line up.
+    let version_rect = RectPx {
+        y: layout.tooltip_line.y,
+        ..layout.version_line
+    };
     out.extend(version_text.map(|text| PaintLabel {
         text: text.into(),
-        rect: layout.version_line,
+        rect: version_rect,
         align: ShellAlign::H_CENTER,
         rgb: SHELL_TEXT_RGB_ENABLED,
         path_a_reveal: None,
