@@ -1673,12 +1673,10 @@ mod tests {
         let map = beside.join("XMP03T4.MAP");
         std::fs::write(&map, assets.get("XMP03T4.MAP").unwrap()).unwrap();
         let verified = ReplayRunner::verify(&root, &decoded, map.to_str());
-        // Remove only the map this test wrote; retain its temporary directory.
+        // Remove the map this test wrote, then its now-empty directory.
         std::fs::remove_file(&map).unwrap();
-        assert_eq!(
-            verified.unwrap().final_state_hash,
-            scene.sim().state_hash()
-        );
+        std::fs::remove_dir(&beside).unwrap();
+        assert_eq!(verified.unwrap().final_state_hash, scene.sim().state_hash());
         let mut corrupted = decoded;
         corrupted.ticks[10].state_hash = Some(1);
         assert!(
