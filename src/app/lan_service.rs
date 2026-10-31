@@ -5526,7 +5526,8 @@ mod tests {
             assert!(guest.send(&bytes, destination, false));
         }
         guest.transport.as_mut().unwrap().service(31);
-        let departure = LanMessage::decode(&next_message(&mut host, &host_session).payload).unwrap();
+        let departure =
+            LanMessage::decode(&next_message(&mut host, &host_session).payload).unwrap();
         assert_eq!(departure.kind(), LanMessageKind::Departure);
         assert_eq!(departure.session_proof().unwrap(), Some(proof));
     }

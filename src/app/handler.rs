@@ -1748,6 +1748,7 @@ impl ApplicationHandler for App {
             if Self::poll_browser_exit(state, event_loop) {
                 return;
             }
+            #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
             if Self::poll_network_goodbye(state, event_loop) {
                 return;
             }

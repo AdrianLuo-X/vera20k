@@ -68,6 +68,7 @@ pub mod match_bootstrap;
 pub(crate) mod match_diagnostics;
 pub(crate) mod match_runtime;
 pub(crate) mod movie_playback;
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
 mod network_goodbye;
 pub(crate) mod movie_subtitles;
 pub(crate) mod persistence;

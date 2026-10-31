@@ -37,6 +37,9 @@ impl App {
         if let Some(sfx) = state.audio.sfx_player.as_mut() {
             sfx.stop_all();
         }
+        // Window events stop now, so the focus loss that frees the cursor
+        // lock never arrives.
+        crate::app::input::cursor::release_cursor_confinement(state);
         state.platform.window.set_visible(false);
         state.frontend.network_goodbye_deadline = Some(Instant::now() + GOODBYE_WAIT);
         true
