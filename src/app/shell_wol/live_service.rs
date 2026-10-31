@@ -280,6 +280,18 @@ pub(super) struct LiveService {
 /// Where players download a newer build (README "Download and play").
 pub(crate) const RELEASES_URL: &str = "https://github.com/YuriPlanet/vera20k/releases";
 
+/// The login box for a lobby that did not answer, instead of retail
+/// TXT_CANT_CONNECT's "Westwood Online".
+const CANT_CONNECT_TEXT: &str = "Could not connect to VERA20k Online. The service may be down, or check your internet connection.";
+
+/// The box when the lobby stops answering while the player is in it.
+const LOBBY_LOST_TEXT: &str = "Lost connection to VERA20k Online. The service may be down, or check your internet connection.";
+
+/// The lobby's own maintenance message when it gave a plain one.
+fn maintenance_text(message: Option<&str>) -> &str {
+    message.unwrap_or("VERA20k Online is down for maintenance. Please try again later.")
+}
+
 /// The lobby's own 426 reason when it gave a plain one, then where to get a
 /// newer build.
 fn update_required_text(message: Option<&str>) -> String {
@@ -1698,6 +1710,18 @@ fn apply_response(state: &mut AppState, service: &mut LiveService, response: htt
         http::Response::LoginFailed { attempt, code } if attempt == service.auth_attempt => {
             state.frontend.wol_account.password.clear();
             service_event(state, WolServiceEvent::Login(Err(code)));
+            // Code 0 is no answer or an unexpected one: TXT_CANT_CONNECT.
+            if code == 0 {
+                super::service::replace_open_box_body(state, CANT_CONNECT_TEXT);
+            }
+        }
+        http::Response::Maintenance { attempt, message } if attempt == service.auth_attempt => {
+            state.frontend.wol_account.password.clear();
+            service_event(state, WolServiceEvent::Login(Err(0)));
+            let text = maintenance_text(message.as_deref()).to_owned();
+            if !super::service::replace_open_box_body(state, &text) {
+                notice(state, &text);
+            }
         }
         http::Response::UpgradeRequired { attempt, message } if attempt == service.auth_attempt => {
             state.frontend.wol_account.password.clear();
@@ -1833,6 +1857,35 @@ fn apply_response(state: &mut AppState, service: &mut LiveService, response: htt
             notice(state, "The online lobby is not responding. Retrying.")
         }
         http::Response::LobbyReachable => notice(state, "The online lobby is responding again."),
+        http::Response::LobbyLost => {
+            // A match keeps its relay through a lobby outage; this asks
+            // again after it.
+            if super::in_match(state) || crate::app::loading::pump::network_loading_active(state) {
+                return;
+            }
+            // The worker keeps the bearer and logs it out at the next
+            // sign-in, so the name is free again.
+            let _ = service.requests.send(http::Request::Abandon);
+            if !state
+                .frontend
+                .wol
+                .as_ref()
+                .is_some_and(|visit| visit.connected)
+            {
+                return;
+            }
+            maps::cancel(state, service);
+            cancel_pending(state, service);
+            // The native disconnect: a box over the lobby, or none where the
+            // runner has no lobby (Quick Match), which then gets one at the
+            // welcome.
+            service_event(state, WolServiceEvent::NetStatus(super::NET_STATUS_LOST));
+            if !super::lobby::replace_box_body(state, LOBBY_LOST_TEXT)
+                && !super::service::show_text_box(state, LOBBY_LOST_TEXT)
+            {
+                notice(state, LOBBY_LOST_TEXT);
+            }
+        }
         http::Response::Offline => {
             crate::app::loading::pump::cancel_network_loading(
                 state,
@@ -1859,7 +1912,8 @@ fn apply_response(state: &mut AppState, service: &mut LiveService, response: htt
         }
         http::Response::Authenticated { .. }
         | http::Response::LoginFailed { .. }
-        | http::Response::UpgradeRequired { .. } => {}
+        | http::Response::UpgradeRequired { .. }
+        | http::Response::Maintenance { .. } => {}
     }
 }
 

@@ -30,6 +30,13 @@ Failed requests return `{error:{code,message}}`; messages must not echo credenti
 Clients show a 426 `message` (plain text, at most 160 characters) to the player with
 the releases link, so it should name the version players need; older clients show a
 fixed line.
+While the operator has closed sign-ins for maintenance, `POST /v1/sessions` returns 503
+`maintenance` with the operator's one-line `message` (at most 160 characters), which
+clients show in place of their "could not connect" text; other 503s mean the lobby is
+unavailable. Players already signed in keep their sessions.
+A client in the lobby, outside a match, whose event polls fail for about a minute tells
+its player the connection was lost and stops polling; its next sign-in logs the old
+session out first.
 The HTTP paths retain `/v1`; `protocol:4` is the required client capability.
 Older/missing capabilities cannot enter new games. Existing v3 sessions may poll, renew an active lease and finish/leave/logout; their active match is preserved.
 Lobby capability4 adds the signed fixed-clock ordering capability.

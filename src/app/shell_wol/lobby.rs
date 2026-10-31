@@ -859,6 +859,16 @@ fn show_box(state: &mut AppState, key: &str, yes_no: bool, then: BoxThen) {
     put_box(state, message, then);
 }
 
+/// Replace the open lobby box's text, for a VERA-specific reason.
+pub(super) fn replace_box_body(state: &mut AppState, body: &str) -> bool {
+    let Some((message, _)) = lobby_mut(state).and_then(|lobby| lobby.message.as_mut()) else {
+        return false;
+    };
+    message.body = body.to_owned();
+    state.platform.window.request_redraw();
+    true
+}
+
 fn put_box(state: &mut AppState, message: WolMessageBox, then: BoxThen) {
     let dialog = message.dialog();
     let Some(lobby) = lobby_mut(state) else {
