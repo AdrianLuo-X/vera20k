@@ -33,7 +33,8 @@ class MacNotarizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, fixture, clear=True):
             root = Path(temporary)
             with patch.object(notarize.ctypes, "CDLL", side_effect=[security, core]), \
-                 patch.object(notarize, "command", side_effect=["", '"login.keychain-db"', "", ""]) as command:
+                 patch.object(notarize, "command", side_effect=["", '"login.keychain-db"', "", ""]) as command, \
+                 patch.object(notarize.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
                 with self.assertRaisesRegex(RuntimeError, "signing failed"):
                     with notarize.signing_keychain(root) as keychain:
                         self.assertEqual(keychain.stat().st_mode & 0o777, 0o600)
@@ -43,6 +44,9 @@ class MacNotarizationTests(unittest.TestCase):
                                  ["security", "list-keychains", "-d", "user", "-s", "login.keychain-db"])
                 security.SecKeychainLock.assert_called_once()
                 core.CFRelease.assert_called_once()
+                self.assertNotIn(fixture["MACOS_SIGNING_KEYCHAIN_PASSWORD"], run.call_args.args[0])
+                self.assertEqual(run.call_args.kwargs["input"], b"fixture-password\n")
+                self.assertTrue(run.call_args.kwargs["start_new_session"])
                 self.assertEqual(list(root.iterdir()), [])
 
     def test_acceptance_preserves_receipt_and_waits_on_same_submission(self):

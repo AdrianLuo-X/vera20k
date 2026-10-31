@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 
@@ -57,6 +58,13 @@ def signing_keychain(directory: Path):
         status = security.SecKeychainUnlock(reference, len(password), password, True)
         if status:
             raise RuntimeError(f"Cannot unlock signing keychain: OSStatus {status}")
+        # Re-authorize Apple's signing tools on this host. Without -k, security
+        # reads its password from stdin; no secret enters argv or its output.
+        result = subprocess.run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:",
+                                 "-s", "-t", "private", str(path)], input=password + b"\n",
+                                capture_output=True, start_new_session=True, timeout=60)
+        if result.returncode:
+            raise RuntimeError(f"Cannot authorize the CI signing key (exit {result.returncode}).")
         del password
         # The copied keychain may normally lock after five minutes. Keep only
         # this disposable CI copy unlocked beyond the bounded notary wait.
@@ -112,6 +120,12 @@ def notarize(image: Path, output: Path, records: Path, identity: str, team: str,
             identities = command(["security", "find-identity", "-v", "-p", "codesigning", str(keychain)])
             if identity not in identities:
                 raise RuntimeError("The expected Developer ID identity is not valid in the signing keychain.")
+            probe = work / "signing-check"
+            shutil.copyfile("/usr/bin/true", probe)
+            command(["codesign", "--force", "--timestamp", "--sign", identity,
+                     "--keychain", str(keychain), str(probe)])
+            command(["codesign", "--verify", "--strict", str(probe)])
+            print("Signing key access verified on this Mac.", flush=True)
             writable = work / "image.dmg"
             mount = work / "mount"
             mount.mkdir()
