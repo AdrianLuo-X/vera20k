@@ -38,7 +38,10 @@ disabled (`gh workflow list --all` shows its state). By hand:
 
 1. Tag the commit of the published dev build that was tested with its version, using the
    maintainer's login, then promote the build. The workflow checks that the tag names that
-   commit and copies the build's three installers under plain release filenames:
+   commit and copies the build's three installers under plain release filenames.
+   Before creating the draft, it verifies the Mac installer's signatures, stapled
+   Apple notarization ticket and Gatekeeper acceptance. An old unnotarized dev
+   build cannot be promoted:
 
    ```bash
    git fetch origin tag <dev build tag>

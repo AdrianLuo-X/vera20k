@@ -62,7 +62,7 @@ jobs:
           images=(unsigned/*.dmg)
           test "${#images[@]}" -eq 1
           name="$(basename "${images[0]}")"
-          python3 .github/release/macos/notarize.py "${images[0]}" "ready/$name" \
+          python3 .github/release/macos/notarize.py sign "${images[0]}" "ready/$name" \
             --records notarization --identity "$MACOS_SIGNING_IDENTITY" --team "$APPLE_TEAM_ID"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

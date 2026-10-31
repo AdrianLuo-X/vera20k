@@ -1,4 +1,4 @@
-"""Sign and notarize a Release-workflow disk image without executing its app.
+"""Sign, notarize, or verify a Release-workflow disk image.
 
 The protected macos-signing environment supplies an encrypted, dedicated
 keychain and its password. Passwords never enter subprocess arguments or logs.
@@ -159,25 +159,59 @@ def notarize(image: Path, output: Path, records: Path, identity: str, team: str,
             submit_and_wait(output, keychain, records, timeout)
         # No signing credentials remain when the distribution checks run.
         command(["xcrun", "stapler", "staple", str(output)])
-        command(["xcrun", "stapler", "validate", str(output)])
-        command(["codesign", "--verify", "--strict", str(output)])
-        command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature",
-                 "--verbose=4", str(output)])
-        command(["hdiutil", "verify", str(output)])
+        verify_distribution(output)
     print("Developer ID signing, notarization and ticket validation succeeded.", flush=True)
+
+
+def verify_distribution(image: Path, *, smoke_test: bool = False):
+    """Require valid signatures and Apple's ticket without changing the image.
+
+    Promotion and signing never execute the payload. Only the separate updater
+    test opts into the help-command smoke test after all validation succeeds.
+    """
+    if image.is_symlink() or not image.is_file():
+        raise RuntimeError("Expected a regular macOS disk image.")
+    command(["codesign", "--verify", "--strict", str(image)])
+    command(["xcrun", "stapler", "validate", str(image)])
+    command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature",
+             "--verbose=4", str(image)])
+    command(["hdiutil", "verify", str(image)])
+    with tempfile.TemporaryDirectory(prefix="vera20k-verify-") as temporary:
+        mount = Path(temporary)
+        command(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mount), str(image)])
+        try:
+            app = mount / "VERA20K.app"
+            program = app / "Contents/MacOS/VERA20K"
+            if app.is_symlink() or not program.is_file():
+                raise RuntimeError("The disk image does not contain the expected VERA20K app.")
+            command(["codesign", "--verify", "--strict", "--verbose=2", str(app)])
+            command(["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)])
+            if smoke_test:
+                command([str(program), "-h"])
+        finally:
+            command(["hdiutil", "detach", str(mount)])
+    print("Mac installer and app signatures and Apple notarization verified.", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", type=Path)
-    parser.add_argument("output", type=Path)
-    parser.add_argument("--records", type=Path, required=True)
-    parser.add_argument("--identity", required=True)
-    parser.add_argument("--team", required=True)
-    parser.add_argument("--timeout", default="30m")
+    operations = parser.add_subparsers(dest="operation", required=True)
+    signing = operations.add_parser("sign", help="Sign, notarize and staple a new image")
+    signing.add_argument("image", type=Path)
+    signing.add_argument("output", type=Path)
+    signing.add_argument("--records", type=Path, required=True)
+    signing.add_argument("--identity", required=True)
+    signing.add_argument("--team", required=True)
+    signing.add_argument("--timeout", default="30m")
+    verify = operations.add_parser("verify", help="Verify an existing image without signing credentials")
+    verify.add_argument("image", type=Path)
+    verify.add_argument("--smoke-test", action="store_true", help="Run the verified app's help command")
     args = parser.parse_args()
-    notarize(args.image.resolve(), args.output.resolve(), args.records.resolve(),
-             args.identity, args.team, args.timeout)
+    if args.operation == "verify":
+        verify_distribution(args.image.absolute(), smoke_test=args.smoke_test)
+    else:
+        notarize(args.image.resolve(), args.output.resolve(), args.records.resolve(),
+                 args.identity, args.team, args.timeout)
 
 
 if __name__ == "__main__":
