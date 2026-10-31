@@ -2099,8 +2099,26 @@ pub(super) fn emit_admitted_fire(
         effects,
     );
     // Concrete class FireAt suffixes follow the base tail, including
-    // LimboLaunch. Infantry's Ares reload hook and Unit's firing counter /
+    // LimboLaunch. Infantry panic / Ares reload and Unit's firing counter /
     // Scalable work stay here for ordinary and direct mission FireAt callers.
+    #[cfg(not(feature = "ares"))]
+    if snap.category == EntityCategory::Infantry
+        && let Some(entity) = world.substrate.entities.get_mut(snap.stable_id)
+        && let Some(live_type) = world.interner.object_type(entity.type_ref(), rules)
+        && crate::sim::infantry::apply_empty_magazine_panic(live_type, entity)
+        && matches!(
+            entity.mission.effective().known(),
+            Some(crate::sim::mission::MissionType::Attack | crate::sim::mission::MissionType::Hunt)
+        )
+    {
+        // InfantryClass::FireAt @0x0051DF60, retail gamemd.exe:
+        //51DFB4..51DFD6 queues Guard(false) after the fear write. No immediate
+        // Commence, target clear, RNG draw, timer write or detach belongs here.
+        crate::sim::mission::authority::queue_entity_mission_deferred(
+            entity,
+            crate::sim::mission::MissionId::from_known(crate::sim::mission::MissionType::Guard),
+        );
+    }
     #[cfg(feature = "ares")]
     if snap.category == EntityCategory::Infantry
         && weapon.ammo_cost() > 0

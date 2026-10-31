@@ -304,6 +304,87 @@ fn finite_infantry_refills_after_damage_fear_expires_and_can_fire_again() {
     );
 }
 
+/// InfantryClass::FireAt51DF8C..51DFD6: a Fraidycat's last returned Bullet
+/// starts panic and queues Guard. The physical E1 weapons/art stay unchanged;
+/// these registered Scenario overrides activate the stock finite-ammo branch.
+#[cfg(not(feature = "ares"))]
+#[test]
+fn fraidycat_last_round_queues_guard_panics_then_refills() {
+    let Some(mut scene) =
+        Scene::new("[E1]\nAmmo=2\nInitialAmmo=2\nFraidycat=yes\nCanPassiveAquire=no\n")
+    else {
+        return;
+    };
+    let target = scene.spawn("GACNST", "Russians", (16, 16));
+    let infantry = scene.spawn("E1", "Americans", (16, 20));
+    let attack = Command::Attack {
+        attacker_id: infantry,
+        target_id: target,
+    };
+    scene.command("Americans", attack.clone());
+    scene.shot(infantry, target);
+    assert_eq!(scene.count(infantry), 1);
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 0);
+    scene.shot(infantry, target);
+    assert_eq!(scene.count(infantry), 0);
+    let actor = scene.actor(infantry);
+    assert_eq!(actor.infantry.unwrap().fear_level(), 300);
+    assert_eq!(actor.mission.current().raw(), 1, "Guard is only queued");
+    assert_eq!(actor.mission.queued().raw(), 5);
+    let position = crate::sim::movement::ground_pose::position_world_xy(&actor.position);
+    let reload = scene.reload(infantry);
+    // A real Stop clears the old attack before the later same-tick refill can
+    // feed another shot; it does not cancel the class's existing panic owner.
+    scene.command(
+        "Americans",
+        Command::Stop {
+            entity_id: infantry,
+        },
+    );
+    let mut escaped = false;
+    for _ in 0..299 {
+        scene.frame();
+        escaped |=
+            crate::sim::movement::ground_pose::position_world_xy(&scene.actor(infantry).position)
+                != position;
+        assert_eq!(scene.count(infantry), 0);
+    }
+    assert!(escaped, "the live Fraidycat panic requests movement");
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 1);
+    scene.frame();
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 0);
+    assert_eq!(scene.count(infantry), 2);
+    assert_eq!(scene.reload(infantry), reload, "no reload timer is armed");
+    scene.command("Americans", attack);
+    scene.shot(infantry, target);
+    assert_eq!(scene.count(infantry), 1);
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 0);
+}
+
+/// FireAt's panic is independent of ReceiveDamage/ForcePanic's Fearless gate.
+#[cfg(not(feature = "ares"))]
+#[test]
+fn fraidycat_last_round_does_not_use_fearless_gate() {
+    let Some(mut scene) = Scene::new(
+        "[E1]\nAmmo=1\nInitialAmmo=1\nFraidycat=yes\nFearless=yes\nCanPassiveAquire=no\n",
+    ) else {
+        return;
+    };
+    let target = scene.spawn("GACNST", "Russians", (16, 16));
+    let infantry = scene.spawn("E1", "Americans", (16, 20));
+    scene.command(
+        "Americans",
+        Command::Attack {
+            attacker_id: infantry,
+            target_id: target,
+        },
+    );
+    scene.shot(infantry, target);
+    assert_eq!(scene.count(infantry), 0);
+    assert_eq!(scene.actor(infantry).infantry.unwrap().fear_level(), 300);
+    assert_eq!(scene.actor(infantry).mission.queued().raw(), 5);
+}
+
 #[cfg(feature = "ares")]
 #[test]
 fn ares_weapon_ammo_cost_controls_admission_debit_and_reload() {

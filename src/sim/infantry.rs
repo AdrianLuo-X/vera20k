@@ -171,6 +171,25 @@ pub fn is_fear_application_blocked(obj: &ObjectType, entity: &GameEntity) -> boo
     obj.fearless || has_weapon_ability(entity.veterancy.rank_kind(), obj, Ability::Fearless)
 }
 
+/// InfantryClass::FireAt @0x0051DF60, retail gamemd.exe instructions:
+/// 51DF82..51DFAA, after the base returns a Bullet. This write has no
+/// Fearless/FEARLESS gate; mission queuing remains with the FireAt caller.
+#[cfg(not(feature = "ares"))]
+pub(crate) fn apply_empty_magazine_panic(obj: &ObjectType, entity: &mut GameEntity) -> bool {
+    if entity.lifecycle.in_limbo()
+        || !obj.fraidycat
+        || entity.ammo().is_none_or(|ammo| ammo.current() != 0)
+    {
+        return false;
+    }
+    entity
+        .infantry
+        .as_mut()
+        .expect("Infantry FireAt requires its class runtime")
+        .fear_level = MAX_FEAR;
+    true
+}
+
 pub fn can_decay_fear(obj: &ObjectType) -> bool {
     !obj.fearless
 }
