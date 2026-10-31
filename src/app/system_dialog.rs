@@ -8,24 +8,35 @@
 //! Windows shows `MessageBoxW`, macOS an `NSAlert` and Linux `zenity` or
 //! `kdialog`, whichever is installed; without either, stderr is all there is.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::ThreadId;
 
 /// Whether a fatal failure may wait on a click; see [`enable_fatal_messages`].
 static FATAL_MESSAGES: AtomicBool = AtomicBool::new(false);
 /// Set by the first fatal message, so a panic that brings down a second thread
 /// does not stack another box over it.
 static FATAL_MESSAGE_SHOWN: AtomicBool = AtomicBool::new(false);
+/// The thread that turned fatal messages on: the game's main thread, whose
+/// panic always ends the game. A worker's panic may not (the random map
+/// dialog recovers from its generator's death), so it gets no box.
+static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
 /// Let fatal failures show a message box. Only a launch a player is watching
 /// turns this on; captures, `-SPAWN` test runs and tests leave it off so that
 /// nothing unattended waits on a click.
+/// Call it from the main thread.
 pub fn enable_fatal_messages() {
+    let _ = MAIN_THREAD.set(std::thread::current().id());
     FATAL_MESSAGES.store(true, Ordering::Release);
 }
 
 /// The panic hook's notifier (`util::logging::install_panic_hook`). It runs
 /// after the log and `except.txt` are written, and must not panic itself.
 pub fn report_panic(info: &std::panic::PanicHookInfo<'_>) {
+    if MAIN_THREAD.get() != Some(&std::thread::current().id()) {
+        return;
+    }
     let mut what = info.to_string();
     if let Some((end, _)) = what.char_indices().nth(600) {
         what.truncate(end);
