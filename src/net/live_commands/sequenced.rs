@@ -716,6 +716,11 @@ impl SequencedSession {
                 if status.oldest_seq > self.next_sequence {
                     return Err(SequencedError::HistoryExpired);
                 }
+                if status.started && !self.started {
+                    // Frame 1 is sealed a frame period after the start, so
+                    // the stall clock starts now, not when loading did.
+                    self.last_progress = None;
+                }
                 self.started |= status.started;
                 self.head_frame = self.head_frame.max(status.head_frame);
                 self.remote_next_sequence = self.remote_next_sequence.max(status.next_seq);
@@ -1384,6 +1389,31 @@ mod stall_tests {
         );
         session.pause.paused = true;
         assert_eq!(session.recovery_status(1_000 + STALL_MS + 1, 40), None);
+    }
+
+    /// Loading leaves the position still for many seconds; the start itself
+    /// must not read as a stall before frame 1 arrives.
+    #[test]
+    fn the_start_of_a_match_is_not_a_stall() {
+        let mut houses = [None; 30];
+        houses[..2].copy_from_slice(&[Some(0), Some(1)]);
+        let mut session = SequencedSession::with_roster(houses, 0, [0; 32], 30);
+        session.last_progress = Some((1_000, (0, 1, 1)));
+        let now = 1_000 + 40_000;
+        session.last_response = Some(now);
+        let status = vera20k_relay_protocol::OrderStatus {
+            head_frame: 0,
+            oldest_seq: 1,
+            next_seq: 1,
+            active_sources: 3,
+            tick_hz: 30,
+            start_delay_ms: 0,
+            started: true,
+        };
+        session
+            .receive(OrderEvent::Status(status), Instant::now())
+            .unwrap();
+        assert_eq!(session.recovery_status(now, 0), None);
     }
 }
 

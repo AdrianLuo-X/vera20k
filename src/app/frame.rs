@@ -1252,7 +1252,7 @@ impl App {
                             Some(if lapsed {
                                 "Reconnecting - VERA20k Online cannot renew this match's game server pass; Quit to leave"
                             } else {
-                                "Reconnecting - waiting for connection; match remains active"
+                                "Reconnecting - waiting for connection; Quit to leave"
                             }
                             .to_owned())
                         }
