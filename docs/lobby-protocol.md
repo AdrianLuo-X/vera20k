@@ -335,9 +335,14 @@ survives that idle interval while another unfinished player of the match is onli
 (a request or stream ack in the last 120 seconds), and otherwise through 10 minutes of silence, until
 explicit finish/leave or the match/session lifetime; lost internet does not remove
 its gameplay source. Names held by crashed clients therefore free once nobody else
-in their match is online. A lobby outage or overload is not player silence: these
+in their match is online. Sooner, a sign-in from the session's own network takes its
+name back once the session has made no request for 30 seconds and has no open
+stream: a running game reaches the lobby at least every 15 seconds, so that session
+belongs to a game that closed or crashed. Its match is finished for it and its bearer
+answers 401. A lobby outage or overload is not player silence: these
 intervals count from the later of the player's last request and the lobby's first
-request after 30 seconds without any or its latest 429 `busy` refusal.
+request after 90 seconds in which it neither served a request nor ran its
+once-a-minute alarm, or its latest 429 `busy` refusal.
 
 `POST /v1/translate` accepts exactly `{text,target}` from a v4 bearer and returns
 `{text}`: `text` translated into `target`, a language tag such as `en` or `zh-Hans`.
