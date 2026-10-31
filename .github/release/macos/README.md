@@ -23,11 +23,19 @@ The script unlocks the temporary keychain through Security.framework so the
 password never enters command arguments. Its subprocesses do not inherit either
 secret. It restores the runner's keychain search list and deletes the temporary
 keychain even on failure; no application code runs while it is loaded.
+The temporary copy's signing permissions are refreshed on the runner, with the
+keychain password supplied on stdin. A signature on a copy of a system binary
+checks actual private-key access before opening the release image; it is not run.
 
 Apple documents transferring file-based keychains between Macs:
 <https://support.apple.com/guide/keychain-access/kyca1121/mac>.
 GitHub documents environment branch protection:
 <https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments>.
+
+To check renewed credentials or diagnose signing independently of a game rebuild,
+dispatch `macos-signing-check.yml` from `main` with `build_run` set to a completed
+main-branch Release run containing `macos-unsigned`. It verifies the source run,
+uses the same signing script, and produces an artifact without publishing a release.
 
 ## A submission that takes longer than the job
 
