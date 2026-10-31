@@ -108,10 +108,10 @@ fn crowded_retail_gi() -> Option<CrowdedGiScene> {
     })
 }
 
-/// Infantry51C826 returns6 for this full allied cell. At the recursive
-/// Process(0) boundary, Walk75AEC0 dispatches CellScatter481670; each GI's
-/// Scatter51D478 must publish its new head/raw reservation before the next
-/// recipient, without running another object AI or advancing the frame.
+/// CellClass::Scatter_Objects481670 dispatches this full allied cell. Each
+/// GI's Scatter51D478 must publish its new head/raw reservation before the
+/// next recipient, without another object AI or frame. Enter directly so no
+/// outer Walk retry scope can mask Scatter's own synchronous boundary.
 #[test]
 fn synchronous_scatter_publishes_retail_gi_heads_with_batching_enabled() {
     use crate::sim::movement::ground_pose::position_world_coord;
@@ -119,9 +119,9 @@ fn synchronous_scatter_publishes_retail_gi_heads_with_batching_enabled() {
         mut sim,
         rules,
         registry,
-        mover,
         friends,
         waiting,
+        ..
     }) = crowded_retail_gi()
     else {
         return;
@@ -135,17 +135,16 @@ fn synchronous_scatter_publishes_retail_gi_heads_with_batching_enabled() {
         )
     });
     let frame = (sim.session.tick(), sim.session.binary_frame());
-    let request = crate::sim::movement::movement_tick::WalkAdmissionRequest::for_response_test(
-        &sim.substrate.entities,
-        mover,
-        false,
+    sim.scatter_cell_objects(
+        (11, 10),
+        MovementLayer::Ground,
+        None,
+        crate::sim::movement::ScatterFlags::new(true, true),
+        &rules,
+        Some(&registry),
+        FrameEffects::default(),
     )
     .unwrap();
-    assert!(
-        sim.run_walk_admission_request(request, &rules, Some(&registry), FrameEffects::default())
-            .unwrap()
-            .is_none()
-    );
     for (id, (position, mission, ai_counter)) in friends.into_iter().zip(before) {
         let e = sim.substrate.entities.get(id).unwrap();
         assert!(
