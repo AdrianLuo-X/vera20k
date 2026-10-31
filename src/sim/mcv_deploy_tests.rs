@@ -124,6 +124,7 @@ fn the_cell_the_mcv_stood_on_ends_as_a_yard_cell() {
 /// converting MCV carries an active curtain when the type's key (else the
 /// `[CombatDamage]` global) allows it. Force Shield's global default is
 /// false and Iron Curtain's is true.
+#[cfg(feature = "phobos")]
 #[test]
 fn deploy_carries_the_curtain_only_when_kept_on_deploy_allows_it() {
     use crate::sim::superweapon::invulnerability::{
