@@ -7,6 +7,16 @@ only that final image. Stable promotion reuses its exact bytes.
 The app is signed in a normal staging folder and then copied back onto the image;
 its signature is verified again after that copy.
 
+Stable promotion checks the exact downloaded installer again on macOS before
+creating the draft release. It requires the disk image's valid signature and
+stapled Apple ticket, plus valid signatures and Gatekeeper acceptance for the
+contained app. Old unnotarized dev builds are refused. This check needs no Apple
+credentials, does not run the app and does not modify or re-notarize the installer:
+
+```sh
+python3 .github/release/macos/notarize.py verify <installer.dmg>
+```
+
 The `macos-signing` GitHub environment must allow **only the exact `main` branch**
 through its deployment branch policy. A condition inside workflow YAML is not a
 replacement for this server-side restriction. No required reviewer is needed for
