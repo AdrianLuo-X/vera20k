@@ -203,11 +203,11 @@ pub(super) enum Response {
     LobbyReachable,
     /// About a minute of failed polls outside a match: polling stopped.
     LobbyLost,
-    /// 503 `maintenance` to a sign-in, with the lobby's message when it
-    /// gave a plain one.
-    Maintenance {
+    /// The lobby refused a sign-in for a reason of its own (maintenance,
+    /// full or busy): the text to show.
+    SignInRefused {
         attempt: u64,
-        message: Option<String>,
+        message: String,
     },
     StartRejected {
         id: u64,
@@ -257,6 +257,23 @@ enum RequestFailure {
     /// 503 `maintenance`: the operator closed sign-ins, with the same kind
     /// of message.
     Maintenance(Option<String>),
+    /// 503 `service_full` or `network_full`: the lobby has no room for this
+    /// sign-in, with the same kind of message.
+    Full(Option<String>),
+}
+
+/// What a lobby refusal of a sign-in tells the player: its own plain
+/// message when it gave one.
+fn sign_in_refusal(failure: RequestFailure) -> String {
+    match failure {
+        RequestFailure::Maintenance(message) => message.unwrap_or_else(|| {
+            "VERA20k Online is down for maintenance. Please try again later.".to_owned()
+        }),
+        RequestFailure::Full(message) => message.unwrap_or_else(|| {
+            "VERA20k Online is full right now. Please try again later.".to_owned()
+        }),
+        _ => "VERA20k Online is busy right now. Please try again in a minute.".to_owned(),
+    }
 }
 
 /// The lobby's `error.message` when it is one short line of plain text.
@@ -317,6 +334,9 @@ impl RequestFailure {
             Some("maintenance") if status == 503 => {
                 Self::Maintenance(plain_message(value.as_ref()))
             }
+            Some("service_full" | "network_full") if status == 503 => {
+                Self::Full(plain_message(value.as_ref()))
+            }
             _ if status == 426 => Self::UpgradeRequired(plain_message(value.as_ref())),
             _ => Self::Status(status),
         }
@@ -336,7 +356,7 @@ impl RequestFailure {
             Self::Status(status) | Self::ChannelRejected { status, .. } => *status,
             Self::LostCursor | Self::AlreadyFinished => 409,
             Self::UpgradeRequired(_) => 426,
-            Self::Maintenance(_) => 503,
+            Self::Maintenance(_) | Self::Full(_) => 503,
         }
     }
 }
@@ -961,8 +981,11 @@ macro_rules! serial_driver {
                     Err(RequestFailure::UpgradeRequired(message)) => {
                         let _ = output.send(Response::UpgradeRequired { attempt, message });
                     }
-                    Err(RequestFailure::Maintenance(message)) => {
-                        let _ = output.send(Response::Maintenance { attempt, message });
+                    Err(error @ (RequestFailure::Maintenance(_)
+                    | RequestFailure::Full(_)
+                    | RequestFailure::Status(429))) => {
+                        let message = sign_in_refusal(error);
+                        let _ = output.send(Response::SignInRefused { attempt, message });
                     }
                     Err(_) => {
                         let _ = output.send(Response::LoginFailed { attempt, code: 0 });
@@ -1390,6 +1413,23 @@ mod tests {
             RequestFailure::response(409, br#"{"error":{"code":"invalid_cursor"}}"#),
             RequestFailure::LostCursor
         );
+    }
+
+    /// A full or busy lobby refuses a sign-in in its own words, not as a
+    /// connection failure.
+    #[test]
+    fn a_full_or_busy_lobby_refuses_a_sign_in_in_its_own_words() {
+        let reason = "Too many players from your network are online.";
+        let full = RequestFailure::response(
+            503,
+            json!({"error":{"code":"network_full","message":reason}})
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(full, RequestFailure::Full(Some(reason.into())));
+        assert_eq!(sign_in_refusal(full), reason);
+        assert!(sign_in_refusal(RequestFailure::Full(None)).contains("full"));
+        assert!(sign_in_refusal(RequestFailure::Status(429)).contains("busy"));
     }
 
     #[test]

@@ -288,10 +288,6 @@ const CANT_CONNECT_TEXT: &str = "Could not connect to VERA20k Online. The servic
 const LOBBY_LOST_TEXT: &str = "Lost connection to VERA20k Online. The service may be down, or check your internet connection.";
 
 /// The lobby's own maintenance message when it gave a plain one.
-fn maintenance_text(message: Option<&str>) -> &str {
-    message.unwrap_or("VERA20k Online is down for maintenance. Please try again later.")
-}
-
 /// The lobby's own 426 reason when it gave a plain one, then where to get a
 /// newer build.
 fn update_required_text(message: Option<&str>) -> String {
@@ -1718,12 +1714,11 @@ fn apply_response(state: &mut AppState, service: &mut LiveService, response: htt
                 super::service::replace_open_box_body(state, CANT_CONNECT_TEXT);
             }
         }
-        http::Response::Maintenance { attempt, message } if attempt == service.auth_attempt => {
+        http::Response::SignInRefused { attempt, message } if attempt == service.auth_attempt => {
             state.frontend.wol_account.password.clear();
             service_event(state, WolServiceEvent::Login(Err(0)));
-            let text = maintenance_text(message.as_deref()).to_owned();
-            if !super::service::replace_open_box_body(state, &text) {
-                notice(state, &text);
+            if !super::service::replace_open_box_body(state, &message) {
+                notice(state, &message);
             }
         }
         http::Response::UpgradeRequired { attempt, message } if attempt == service.auth_attempt => {
@@ -1916,7 +1911,7 @@ fn apply_response(state: &mut AppState, service: &mut LiveService, response: htt
         http::Response::Authenticated { .. }
         | http::Response::LoginFailed { .. }
         | http::Response::UpgradeRequired { .. }
-        | http::Response::Maintenance { .. } => {}
+        | http::Response::SignInRefused { .. } => {}
     }
 }
 
