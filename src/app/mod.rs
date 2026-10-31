@@ -98,6 +98,8 @@ pub(crate) mod sidebar_projection;
 mod sidebar_projection_tests;
 pub(crate) mod spawn_probe;
 mod state;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub mod system_dialog;
 #[cfg(feature = "telemetry-dashboard")]
 pub mod telemetry;
 #[cfg(feature = "telemetry-dashboard")]

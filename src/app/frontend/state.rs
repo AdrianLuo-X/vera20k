@@ -57,6 +57,8 @@ pub(crate) struct FrontendState {
     pub(crate) main_menu_movie_last_step: Instant,
     /// Terminal menu failure; retained for the error screen and input gate.
     pub(crate) main_menu_shell_error: Option<String>,
+    /// The config and settings files the error screen names (`initialize`).
+    pub(crate) startup_files: crate::app::initialize::StartupFiles,
     /// Set by each status-screen draw and taken by the frame's cursor owner:
     /// the card has no retail art, so the window's own cursor shows over it.
     pub(crate) status_screen_drawn: bool,
