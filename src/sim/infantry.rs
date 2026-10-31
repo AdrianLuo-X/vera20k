@@ -226,10 +226,18 @@ pub fn apply_fear_from_damage(
     condition_red_ratio: f64,
     condition_yellow_ratio: f64,
 ) {
-    if damage_landed == 0
-        || entity.health.current() == 0
-        || is_fear_application_blocked(obj, entity)
-    {
+    if damage_landed == 0 || entity.health.current() == 0 {
+        return;
+    }
+    let latch = damager_present
+        && entity
+            .infantry
+            .as_ref()
+            .is_some_and(|infantry| infantry.fear_level <= FEAR_LATCH_CEILING);
+    // Retail gamemd.exe InfantryClass::ReceiveDamage @0x00517FA0:
+    //518C5C..518C91 returns from the sourced Fraidycat latch before the
+    //Fearless/FEARLESS gates at518C94/518CC8. Panic keeps its shared gate.
+    if !(latch && obj.fraidycat) && is_fear_application_blocked(obj, entity) {
         return;
     }
     let Some(infantry) = entity.infantry.as_mut() else {
@@ -239,7 +247,7 @@ pub fn apply_fear_from_damage(
     // ceiling *sets* fear outright — 300 for a Fraidycat, 100 otherwise — instead
     // of adding to it. Only a hit with no damager, or one taken while fear is
     // already above the ceiling, runs the health-band ladder below.
-    if damager_present && infantry.fear_level <= FEAR_LATCH_CEILING {
+    if latch {
         infantry.fear_level = if obj.fraidycat {
             MAX_FEAR
         } else {
@@ -751,6 +759,10 @@ pub fn apply_prone_speed(speed: SimFixed, crawls: bool, multiplier: Option<f64>)
     };
     SimFixed::from_num(adjusted)
 }
+
+#[cfg(test)]
+#[path = "infantry_damage_fear_tests.rs"]
+mod damage_fear_tests;
 
 #[cfg(test)]
 mod tests {
