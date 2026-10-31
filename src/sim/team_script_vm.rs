@@ -1067,10 +1067,10 @@ impl TeamScriptVm {
         self.rejoin_team.retain(|_, team| *team != team_id);
     }
 
-    /// `entity_id`'s team (Foot `+0x5D4`), if any, is leaving the map
-    /// (`TeamClass+0x82`): Fly's playfield latch writes it for a retreating
-    /// aircraft and its passengers leaving the map (`0x004CD59F`,
-    /// `0x004CD5CC`).
+    /// Latch TeamClass+0x82 for `entity_id`'s current team (Foot+0x5D4),
+    /// consumed by the empty-team event23 predicate. InfantryAI51BE3E..51BE52
+    /// writes it from retained playfield membership; Fly's latch also writes
+    /// it for retreating aircraft/passengers (`0x004CD59F`, `0x004CD5CC`).
     pub(crate) fn mark_member_team_leaving_map(&mut self, entity_id: u64) {
         if let Some(team) = self
             .member_team

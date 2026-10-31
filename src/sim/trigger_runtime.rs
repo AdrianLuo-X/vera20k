@@ -956,6 +956,13 @@ struct TagEventInput {
     force: bool,
 }
 
+/// The two native TeamClass event23 broadcasts use opposite array walks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TeamTagOrder {
+    Forward,
+    Reverse,
+}
+
 /// Spring7265C0 resolves its authored House per action, preserving the incoming
 /// actor and packed Cell alongside the live Trigger. Direct TAction controls
 /// may deliberately supply no live instance.
@@ -2272,37 +2279,51 @@ impl Simulation {
         self.publish_trigger_effects(effects);
     }
 
-    /// Recalc6EA49F..6EA4D2 walks the current Tag array backwards before
-    /// destroying an empty, previously-full leaving Team. No own RNG draws,
-    /// timers or detach: ordinary Register/Reset/actions own those effects.
+    /// Retail gamemd.exe: TeamClass::Recalc6EA49F..6EA4D2 walks the Tag
+    /// array backwards; TeamClass::AI6E92D0..6E9320 walks forwards and
+    /// revisits the slot after a successful raise (6E9312). Both broadcast
+    /// before destroying the empty leaving Team. No own RNG draws, timers
+    /// or detach: ordinary Register/Reset/actions own those effects.
     pub(crate) fn raise_team_left_map_tags(
         &mut self,
+        order: TeamTagOrder,
         rules: &crate::rules::ruleset::RuleSet,
         registry: Option<&crate::rules::overlay_types::OverlayTypeRegistry>,
         frame_effects: FrameEffects<'_>,
     ) {
-        let count = self.trigger_runtime.tag_order.len();
+        let mut ordinal = match order {
+            TeamTagOrder::Forward => Some(0),
+            TeamTagOrder::Reverse => self.trigger_runtime.tag_order.len().checked_sub(1),
+        };
         let mut effects = Vec::new();
-        for ordinal in (0..count).rev() {
-            // As with House tag traversal, shrinking callbacks can leave a
-            // stale native slot beyond the new count; Rust skips that slot.
-            let Some(&tag) = self.trigger_runtime.tag_order.get(ordinal) else {
-                continue;
-            };
-            if self.dispatch_live_tag_event(
-                tag,
-                TagEventInput {
-                    kind: 23,
-                    ..Default::default()
-                },
-                &mut effects,
-                rules,
-                registry,
-                frame_effects,
-            ) && self.trigger_runtime.tag_order.is_empty()
-            {
+        while let Some(slot) = ordinal {
+            if let Some(&tag) = self.trigger_runtime.tag_order.get(slot) {
+                let raised = self.dispatch_live_tag_event(
+                    tag,
+                    TagEventInput {
+                        kind: 23,
+                        ..Default::default()
+                    },
+                    &mut effects,
+                    rules,
+                    registry,
+                    frame_effects,
+                );
+                if raised && self.trigger_runtime.tag_order.is_empty() {
+                    break;
+                }
+                if raised && order == TeamTagOrder::Forward {
+                    continue;
+                }
+            } else if order == TeamTagOrder::Forward {
                 break;
             }
+            // Reverse traversal retains its original count. Shrinking
+            // callbacks can leave stale native slots; safe storage skips them.
+            ordinal = match order {
+                TeamTagOrder::Forward => slot.checked_add(1),
+                TeamTagOrder::Reverse => slot.checked_sub(1),
+            };
         }
         self.publish_trigger_effects(effects);
     }

@@ -22,6 +22,7 @@ use crate::rules::overlay_types::OverlayTypeRegistry;
 use crate::rules::ruleset::RuleSet;
 use crate::sim::components::DriveCoord;
 use crate::sim::game_entity::GameEntity;
+use crate::sim::trigger_runtime::TeamTagOrder;
 
 use crate::sim::world::FrameEffects;
 use crate::sim::world::Simulation;
@@ -220,6 +221,16 @@ impl Simulation {
         // multiplayer game, is destroyed.
         let team_rules = TeamRules::new(&rules.general, self.session.game_mode_nonzero());
         if team.dissolves(&team_rules, current_frame) {
+            // TeamClass::AI @0x006E9140, retail gamemd.exe:6E92D0..6E9320
+            // raises23 while the empty Team still exists for HasOccurred23.
+            if team.leaving_map {
+                self.raise_team_left_map_tags(
+                    TeamTagOrder::Forward,
+                    rules,
+                    registry,
+                    frame_effects,
+                );
+            }
             self.destroy_team(team_id, rules, frame_effects);
             return;
         }
@@ -320,7 +331,12 @@ impl Simulation {
                 if team.leaving_map {
                     //6EA49F..6EA4D2 raises23 while this empty Team still
                     //exists. Callbacks can destroy Teams or create new Tags.
-                    self.raise_team_left_map_tags(rules, registry, frame_effects);
+                    self.raise_team_left_map_tags(
+                        TeamTagOrder::Reverse,
+                        rules,
+                        registry,
+                        frame_effects,
+                    );
                 }
                 self.destroy_team(team_id, rules, frame_effects);
                 return false;

@@ -493,6 +493,17 @@ impl Simulation {
                 .set_foot_firing_sequence(0);
             self.infantry_do_action(id, requested, false, rules, effects)?;
         }
+        // InfantryClass::AI @0x0051BAB0, retail gamemd.exe instructions:
+        //51BE3E..51BE52 latches Team+82 from the retained playfield byte+3D5.
+        // A fresh bounds query would discard ordinary movement's hysteresis.
+        if self
+            .substrate
+            .entities
+            .get(id)
+            .is_some_and(|actor| actor.in_playfield())
+        {
+            self.team_script_vm.mark_member_team_leaving_map(id);
+        }
         // InfantryClass::AI51BEC0 calls TryThiefVehicleCapture5202F0 before
         // the second Ready/Commence. Success returns before Fear/Fire/Doing.
         let capture = self.infantry_try_thief_capture(id, rules, registry, effects)?;
