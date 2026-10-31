@@ -265,10 +265,6 @@ fn apply_startup_audio_profile(
 }
 
 impl App {
-    fn load_version_txt() -> String {
-        crate::util::version::retail_internal_version().to_owned()
-    }
-
     /// Create the window and GPU presentation owners. Does NOT load a map —
     /// starts in MainMenu state. Map loading is deferred to when the user
     /// clicks "Quick Play".
@@ -651,7 +647,6 @@ impl App {
                         &mut main_menu_shell_error,
                     )
                 });
-                let version_txt = Self::load_version_txt();
                 let skirmish_scenario_records =
                     match (startup_asset_manager.as_mut(), game_config.as_ref()) {
                         (Some(assets), Some(config)) => {
@@ -1061,7 +1056,6 @@ impl App {
                 main_menu_movie_last_step: Instant::now(),
                 main_menu_shell_error,
                 status_screen_drawn: false,
-                version_txt,
                 shell_first_paint_slide: None,
                 shell_slide_active_shell: None,
                 shell_slide_generation: 0,
