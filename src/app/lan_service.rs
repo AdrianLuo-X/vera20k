@@ -98,6 +98,17 @@ struct ObservedParticipant {
     last_seen: u32,
 }
 
+/// How long a player the host kicks from VERA's room is kept out of it.
+const KICK_KEEP_OUT_BUCKETS: u32 = super::match_runtime::frame_pacer::frame_bucket(5 * 60 * 1000);
+
+/// A player the host kicked from VERA's room: joins from that address or
+/// name are refused until the wall bucket `until`.
+struct KeptOut {
+    address: Ipv4Addr,
+    name: String,
+    until: u32,
+}
+
 pub(crate) struct LanService {
     setup_generation: u64,
     setup_scope: Option<SessionScope>,
@@ -137,6 +148,8 @@ pub(crate) struct LanService {
     force_presence: bool,
     force_query: bool,
     deferred_setup: std::collections::VecDeque<super::shell_network_setup::NetworkSetupRequest>,
+    /// VERA-only: who the host kicked and may not rejoin yet.
+    kept_out: Vec<KeptOut>,
     /// A direct spawn launch (docs/spawn.md): the launcher admitted the
     /// roster and the map, so discovery, join/confirm and map transfer never
     /// run; scope, nonces and endpoints come from [`DirectAdmission`].
@@ -219,6 +232,7 @@ impl LanService {
             force_presence: true,
             force_query: false,
             deferred_setup: Default::default(),
+            kept_out: Vec::new(),
             preadmitted: false,
             setup_generation: 0,
             setup_scope: None,
@@ -514,6 +528,8 @@ impl LanService {
         &mut self,
         session: &super::match_runtime::session::MatchSession,
         name: &str,
+        keep_out: bool,
+        now: u32,
     ) -> anyhow::Result<bool> {
         anyhow::ensure!(session.host(), "only the LAN host may kick a participant");
         let launch = session
@@ -528,6 +544,18 @@ impl LanService {
         let endpoint = session
             .network_endpoint(source)
             .ok_or_else(|| anyhow::anyhow!("kick target has no admitted endpoint"))?;
+        if keep_out {
+            // Several players can share an address, so each keeps its entry.
+            self.kept_out.retain(|entry| {
+                (entry.until.wrapping_sub(now) as i32) > 0
+                    && !(entry.address == *endpoint.ip() && entry.name.eq_ignore_ascii_case(name))
+            });
+            self.kept_out.push(KeptOut {
+                address: *endpoint.ip(),
+                name: name.to_owned(),
+                until: now.wrapping_add(KICK_KEEP_OUT_BUCKETS),
+            });
+        }
         //5EC9F0 ->5DB600: reliable Type8/reason4 to the old node. Membership
         // remains until its Type10 reply, even after its display row is unbound.
         let mut proof = self.control_proof()?;
@@ -544,6 +572,15 @@ impl LanService {
             denied.as_bytes().to_vec(),
             direct(endpoint),
         )))
+    }
+
+    /// Whether a join from `endpoint` as `name` comes from a player the host
+    /// kicked less than five minutes ago.
+    fn keeps_out(&self, endpoint: SocketAddrV4, name: &str, now: u32) -> bool {
+        self.kept_out.iter().any(|entry| {
+            (entry.until.wrapping_sub(now) as i32) > 0
+                && (entry.address == *endpoint.ip() || entry.name.eq_ignore_ascii_case(name))
+        })
     }
 
     fn queue_departure(
@@ -1018,6 +1055,8 @@ impl LanService {
         self.departure = None;
         self.deferred_setup.clear();
         self.pending_setup.clear();
+        // A kick keeps a player out of that room only, as online.
+        self.kept_out.clear();
         self.setup_reassembly = Default::default();
         self.force_query = false;
         self.force_presence = true;
@@ -1685,7 +1724,7 @@ pub(crate) fn poll(state: &mut AppState, now_ms: u64) {
         service.flush_setup();
     }
     poll_direct_start(state);
-    drain_setup_requests(state);
+    drain_setup_requests(state, now);
     drain_match_requests(state);
     advance_go(state, now, true);
 }
@@ -2764,6 +2803,7 @@ fn join_denial(
     endpoint: SocketAddrV4,
     message: &LanMessage,
     proof: &LanSessionProof,
+    now: u32,
 ) -> Option<u32> {
     let request = message.join_fields().expect("join request");
     let same_peer = state
@@ -2808,6 +2848,15 @@ fn join_denial(
             })
     {
         Some(0)
+    } else if !same_peer
+        && state
+            .match_state
+            .lan_service
+            .as_ref()
+            .is_some_and(|service| service.keeps_out(endpoint, &message.name(), now))
+    {
+        // VERA-only: the host kicked this player within five minutes.
+        Some(9)
     } else if !same_peer
         && state
             .match_state
@@ -2871,7 +2920,7 @@ fn offer_join(
         .session_proof()?
         .ok_or_else(|| anyhow::anyhow!("LAN join has no VERA build identity"))?;
     anyhow::ensure!(proof.join_nonce != [0; 16], "LAN join has no request nonce");
-    if let Some(reason) = join_denial(state, endpoint, message, &proof) {
+    if let Some(reason) = join_denial(state, endpoint, message, &proof, now) {
         return send_join_denial(state, endpoint, reason, &proof);
     }
     let current = state
@@ -3016,7 +3065,7 @@ fn confirm_join(
         .expect("visit")
         .confirmed_request(endpoint, &proof, now);
     if let Some(request) = request {
-        if let Some(reason) = join_denial(state, endpoint, &request, &proof) {
+        if let Some(reason) = join_denial(state, endpoint, &request, &proof, now) {
             return send_join_denial(state, endpoint, reason, &proof);
         }
         // Reserve the final reply before changing Session membership. UI-side
@@ -3723,7 +3772,7 @@ fn remote_sources(state: &AppState) -> Vec<usize> {
         })
 }
 
-fn drain_setup_requests(state: &mut AppState) {
+fn drain_setup_requests(state: &mut AppState, now: u32) {
     let incoming = state
         .frontend
         .network_setup_protocol
@@ -3755,7 +3804,7 @@ fn drain_setup_requests(state: &mut AppState) {
             deferred.push_back(request);
             continue;
         }
-        match setup_request(state, &request) {
+        match setup_request(state, &request, now) {
             Ok(true) => {}
             Ok(false) => deferred.push_back(request),
             Err(error) => {
@@ -3781,19 +3830,20 @@ fn drain_setup_requests(state: &mut AppState) {
 fn setup_request(
     state: &mut AppState,
     request: &super::shell_network_setup::NetworkSetupRequest,
+    now: u32,
 ) -> anyhow::Result<bool> {
     use super::shell_network_setup::NetworkSetupRequest;
     if let Some(admitted) = maps::setup_request(state, request)? {
         return Ok(admitted);
     }
     let message = match request {
-        NetworkSetupRequest::Kick { name } => {
+        NetworkSetupRequest::Kick { name, keep_out } => {
             return state
                 .match_state
                 .lan_service
                 .as_mut()
                 .expect("visit")
-                .kick_peer(&state.match_state.session, name);
+                .kick_peer(&state.match_state.session, name, *keep_out, now);
         }
         NetworkSetupRequest::PublishOptions => return options::publish_options(state),
         NetworkSetupRequest::PublishRoster => return options::publish_roster(state),
@@ -5425,7 +5475,10 @@ mod tests {
                 .raw_slot_index
                 .is_none()
         );
-        host.kick_peer(&host_session, &removed.name).unwrap();
+        host.kick_peer(&host_session, &removed.name, true, 30)
+            .unwrap();
+        let rejoin = |name: &str, now| host.keeps_out(guest_address, name, now);
+        assert!(rejoin("Renamed", 30) && !rejoin("Renamed", 30 + KICK_KEEP_OUT_BUCKETS));
         host.transport.as_mut().unwrap().service(31);
         let denied = next_message(&mut guest, &guest_session);
         assert_eq!(
@@ -5472,6 +5525,8 @@ mod tests {
         guest_session.return_to_network_lobby();
         assert!(guest.admitted_host.is_none());
         assert!(guest_session.network_setup().is_none());
+        host.clear_setup();
+        assert!(!host.keeps_out(guest_address, "Renamed", 31));
     }
 
     #[test]

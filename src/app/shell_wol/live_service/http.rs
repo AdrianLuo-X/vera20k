@@ -267,6 +267,11 @@ impl RequestFailure {
                 status,
                 code: 0x8004_0071,
             },
+            // The host kicked this player from the room within five minutes.
+            Some("room_kept_out") if status == 403 => Self::ChannelRejected {
+                status,
+                code: crate::app::shell_wol::lobby::KEPT_OUT_JOIN_ERROR,
+            },
             Some("room_full") if status == 409 => Self::ChannelRejected {
                 status,
                 code: 0x8004_006E,
@@ -1140,6 +1145,11 @@ mod tests {
         assert_eq!(
             wrong_key.command_failure("join"),
             CommandFailure::Rejected(0x8004_0071)
+        );
+        let kept_out = RequestFailure::response(403, br#"{"error":{"code":"room_kept_out"}}"#);
+        assert_eq!(
+            kept_out.command_failure("join"),
+            CommandFailure::Rejected(crate::app::shell_wol::lobby::KEPT_OUT_JOIN_ERROR)
         );
         let full = RequestFailure::response(409, br#"{"error":{"code":"room_full"}}"#);
         assert_eq!(
