@@ -513,6 +513,7 @@ fn shield_tint_uses_the_viewers_bucket_and_rgb565_word() {
 
 /// Phobos `TechnoClass_InvulnerabilityIntensity_Adjust` (`0x70E475`): the
 /// configured extra intensity scales by 1000 and is added by kind.
+#[cfg(feature = "phobos")]
 #[test]
 fn curtain_extra_tint_reads_the_audio_visual_globals() {
     use crate::sim::superweapon::invulnerability::InvulnKind;

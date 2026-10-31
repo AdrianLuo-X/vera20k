@@ -1101,6 +1101,7 @@ fn indexed_turret_animation_uses_its_selected_hva_count() {
 /// `0x7062FB`): `DisguiseBlinkingVisibility` decides whether the viewer sees
 /// through a disguise. The campaign arm of a human owner reads Owner and
 /// Allies; an AI owner takes the `CanTargetHouse` arm.
+#[cfg(feature = "phobos")]
 #[test]
 fn disguise_viewer_sees_through_per_disguise_blinking_visibility() {
     use crate::rules::ini_parser::IniFile;
