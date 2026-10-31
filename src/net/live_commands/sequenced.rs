@@ -119,6 +119,10 @@ fn trace_mut(
         .find(|trace| trace.batch_id == batch_id)
 }
 
+/// How long a running match's ordered stream may stand still before the
+/// client shows Reconnecting (and Quit leaves without the stream).
+const STALL_MS: u32 = 5_000;
+
 fn service_due(last: Option<u32>, now: u32, interval: i32) -> bool {
     last.is_none_or(|last| super::probe_due(last, now, interval))
 }
@@ -166,6 +170,10 @@ pub(super) struct SequencedSession {
     head_frame: u32,
     error: Option<LiveCommandError>,
     last_response: Option<u32>,
+    /// When the ordered stream last moved (its head, next sequence or our
+    /// cursor). A relay can keep answering while its stream stands still:
+    /// federated relays whose link failed.
+    last_progress: Option<(u32, (u32, u64, u64))>,
     first_service: Option<u32>,
     statuses: u64,
     unreadable: Option<Unreadable>,
@@ -265,6 +273,7 @@ impl SequencedSession {
             head_frame: 0,
             error: None,
             last_response: None,
+            last_progress: None,
             first_service: None,
             statuses: 0,
             unreadable: None,
@@ -468,6 +477,14 @@ impl SequencedSession {
         if let Err(error) = self.check_unreadable(now) {
             self.error = Some(error.into());
             return;
+        }
+        let position = (
+            self.head_frame,
+            self.remote_next_sequence,
+            self.next_sequence,
+        );
+        if self.last_progress.is_none_or(|(_, last)| last != position) {
+            self.last_progress = Some((now, position));
         }
         self.service_delivery(transport, now);
         self.service_pause(transport, now);
@@ -699,6 +716,11 @@ impl SequencedSession {
                 if status.oldest_seq > self.next_sequence {
                     return Err(SequencedError::HistoryExpired);
                 }
+                if status.started && !self.started {
+                    // Frame 1 is sealed a frame period after the start, so
+                    // the stall clock starts now, not when loading did.
+                    self.last_progress = None;
+                }
                 self.started |= status.started;
                 self.head_frame = self.head_frame.max(status.head_frame);
                 self.remote_next_sequence = self.remote_next_sequence.max(status.next_seq);
@@ -823,6 +845,18 @@ impl SequencedSession {
     ) -> Option<super::NetworkRecoveryStatus> {
         let last = self.last_response.or(self.first_service)?;
         if now.wrapping_sub(last) > 3_000 {
+            return Some(super::NetworkRecoveryStatus::Reconnecting);
+        }
+        // Every running frame ends with a FrameEnd entry, so a started,
+        // unpaused match whose stream has stood still while this client
+        // waits for it is stalled even though the relay answers.
+        if self.started
+            && !self.pause.paused
+            && current_frame >= self.head_frame
+            && self
+                .last_progress
+                .is_some_and(|(at, _)| now.wrapping_sub(at) > STALL_MS)
+        {
             return Some(super::NetworkRecoveryStatus::Reconnecting);
         }
         let frames = self.head_frame.saturating_sub(current_frame);
@@ -1329,6 +1363,57 @@ mod restore_tests {
         session.settle_restore(990).unwrap();
         assert!(!session.restoring());
         assert_eq!((session.next_batch, session.accepted_batch), (42, 41));
+    }
+}
+
+#[cfg(test)]
+mod stall_tests {
+    use super::*;
+
+    /// Federated relays whose link failed still answer, but the ordered
+    /// stream stops: a running, unpaused match shows Reconnecting, so Quit
+    /// leaves without waiting on that stream.
+    #[test]
+    fn a_stream_that_stands_still_while_its_relay_answers_is_reconnecting() {
+        let mut houses = [None; 30];
+        houses[..2].copy_from_slice(&[Some(0), Some(1)]);
+        let mut session = SequencedSession::with_roster(houses, 0, [0; 32], 30);
+        session.started = true;
+        session.head_frame = 40;
+        session.last_progress = Some((1_000, (40, 90, 90)));
+        session.last_response = Some(1_000 + STALL_MS);
+        assert_eq!(session.recovery_status(1_000 + STALL_MS, 40), None);
+        assert_eq!(
+            session.recovery_status(1_000 + STALL_MS + 1, 40),
+            Some(super::super::NetworkRecoveryStatus::Reconnecting)
+        );
+        session.pause.paused = true;
+        assert_eq!(session.recovery_status(1_000 + STALL_MS + 1, 40), None);
+    }
+
+    /// Loading leaves the position still for many seconds; the start itself
+    /// must not read as a stall before frame 1 arrives.
+    #[test]
+    fn the_start_of_a_match_is_not_a_stall() {
+        let mut houses = [None; 30];
+        houses[..2].copy_from_slice(&[Some(0), Some(1)]);
+        let mut session = SequencedSession::with_roster(houses, 0, [0; 32], 30);
+        session.last_progress = Some((1_000, (0, 1, 1)));
+        let now = 1_000 + 40_000;
+        session.last_response = Some(now);
+        let status = vera20k_relay_protocol::OrderStatus {
+            head_frame: 0,
+            oldest_seq: 1,
+            next_seq: 1,
+            active_sources: 3,
+            tick_hz: 30,
+            start_delay_ms: 0,
+            started: true,
+        };
+        session
+            .receive(OrderEvent::Status(status), Instant::now())
+            .unwrap();
+        assert_eq!(session.recovery_status(now, 0), None);
     }
 }
 

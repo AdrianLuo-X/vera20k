@@ -1251,10 +1251,21 @@ impl App {
                         crate::app::match_runtime::frame_pacer::wall_clock_ms() as u32,
                         frame,
                     )? {
-                        crate::net::live_commands::NetworkRecoveryStatus::Reconnecting => Some(
-                            "Reconnecting - waiting for connection; match remains active"
-                                .to_owned(),
-                        ),
+                        crate::net::live_commands::NetworkRecoveryStatus::Reconnecting => {
+                            // The relay drops a lapsed pass, which only the
+                            // lobby can renew: then waiting cannot help.
+                            let lapsed = live.relay_expires().is_some_and(|expires| {
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .is_ok_and(|now| now.as_secs() >= expires)
+                            });
+                            Some(if lapsed {
+                                "Reconnecting - VERA20k Online cannot renew this match's game server pass; Quit to leave"
+                            } else {
+                                "Reconnecting - waiting for connection; Quit to leave"
+                            }
+                            .to_owned())
+                        }
                         crate::net::live_commands::NetworkRecoveryStatus::CatchingUp { frames } => {
                             Some(if live.restoring_match() {
                                 format!("Rejoining the match - {frames} frames behind")
