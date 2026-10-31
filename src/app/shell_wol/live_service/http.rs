@@ -609,6 +609,30 @@ macro_rules! platform_await {
 macro_rules! serial_driver {
     ($($asynchronous:tt)?) => {
         impl Client {
+    /// Log out a bearer this worker still holds (given up in an outage, or
+    /// whose logout the shell stopped retrying), which still holds its name.
+    /// The lobby refuses to log out a session in a match, so a match the
+    /// shell already left is finished first. False while the lobby is away.
+    $($asynchronous)? fn release_held_session(&mut self) -> bool {
+        if self.token.is_none() {
+            return true;
+        }
+        if let Some(match_id) = self.active_match.clone() {
+            let body = json!({"request_id":"held-finish","after":self.cursor,"operation":"finish","payload":{"match_id":match_id}});
+            let _ = platform_await!(self.request("/v1/commands", Some(&body)));
+            self.active_match = None;
+        }
+        let body = json!({"request_id":"held-logout","after":self.cursor,"operation":"logout","payload":{}});
+        match platform_await!(self.request("/v1/commands", Some(&body))) {
+            Ok(_) | Err(RequestFailure::Status(401)) => {
+                self.token = None;
+                self.abandoned = false;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     $($asynchronous)? fn session_failed(&mut self, error: RequestFailure, output: &Sender<Response>) -> bool {
         if let RequestFailure::UpgradeRequired(message) = error {
             // The lobby keeps serving an outdated session's events, finish,
@@ -888,35 +912,10 @@ macro_rules! serial_driver {
                 let _ = output.send(response);
             }
             Some(Request::OpenSession { attempt, nickname }) => {
-                // A bearer given up in an outage still holds its name: log it
-                // out first, and while the lobby is still away, report that.
-                if client.abandoned {
-                    // The lobby refuses to log out a session in a match, so
-                    // a match the shell already left is finished first.
-                    if let Some(match_id) = client.active_match.clone() {
-                        let body = json!({"request_id":"abandoned-finish","after":client.cursor,"operation":"finish","payload":{"match_id":match_id}});
-                        let _ = platform_await!(client.request("/v1/commands", Some(&body)));
-                        client.active_match = None;
-                    }
-                    let body = json!({"request_id":"abandoned-logout","after":client.cursor,"operation":"logout","payload":{}});
-                    match platform_await!(client.request("/v1/commands", Some(&body))) {
-                        Ok(_) | Err(RequestFailure::Status(401)) => {
-                            client.token = None;
-                            client.abandoned = false;
-                        }
-                        Err(_) => {
-                            let _ = output.send(Response::LoginFailed { attempt, code: 0 });
-                            continue;
-                        }
-                    }
-                }
-                // A new username cannot prove ownership of an old bearer.
-                // The service's existing cleanup gate must retire it first.
-                if client.token.is_some() {
-                    let _ = output.send(Response::LoginFailed {
-                        attempt,
-                        code: 0x8004_0064,
-                    });
+                // A held bearer still holds its name: log it out first, and
+                // while the lobby is away, report that instead of the name.
+                if !platform_await!(client.release_held_session()) {
+                    let _ = output.send(Response::LoginFailed { attempt, code: 0 });
                     continue;
                 }
                 client.cursor = 0;
@@ -1240,6 +1239,48 @@ mod tests {
             finished.command_failure("create"),
             CommandFailure::Rejected(0x8000_4005)
         );
+    }
+
+    /// A bearer the shell stopped logging out (Back in an outage, or a
+    /// sign-in that answered after its wait) is logged out before the next
+    /// sign-in instead of reporting the name in use; while the lobby is
+    /// away it stays held.
+    #[test]
+    fn a_held_bearer_is_logged_out_before_signing_in_again() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let lobby = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let (mut request, mut chunk) = (Vec::new(), [0; 1024]);
+            while !String::from_utf8_lossy(&request).contains("logout") {
+                let read = stream.read(&mut chunk).unwrap();
+                assert_ne!(read, 0, "the request ended without a logout");
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let mut client = Client {
+            stopping: Arc::new(AtomicBool::new(false)),
+            agent: ureq::Agent::new_with_defaults(),
+            base: "http://127.0.0.1:1".to_owned(),
+            token: Some("synthetic-test-session".to_owned()),
+            cursor: 4,
+            active_match: None,
+            spawned: false,
+            abandoned: false,
+        };
+        assert!(!client.release_held_session());
+        assert!(client.token.is_some());
+        client.base = format!("http://{address}");
+        assert!(client.release_held_session());
+        assert!(client.token.is_none());
+        lobby.join().unwrap();
     }
 
     /// From about a minute of failed polls on, each failed poll asks the

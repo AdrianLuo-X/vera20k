@@ -409,6 +409,16 @@ impl App {
                         ..Default::default()
                     };
                 }
+                // A Back just before Quit can still be logging out.
+                #[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+                if Self::begin_network_goodbye(state) {
+                    return RuntimeServiceResult {
+                        quit_requested: true,
+                        main_tick_admitted,
+                        screen_shake_offset,
+                        ..Default::default()
+                    };
+                }
                 event_loop.exit();
                 return RuntimeServiceResult {
                     quit_requested: true,

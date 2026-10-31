@@ -1412,8 +1412,14 @@ fn poll_deadline(state: &mut AppState) -> Option<Instant> {
         return Some(deadline);
     }
     let step = match std::mem::take(&mut visit.awaiting) {
-        // 0x007866E4: no box from the wait itself.
-        Awaiting::Connect { .. } => visit.connect_failed(),
+        // 0x007866E4: no box from the wait itself. A sign-in still queued
+        // behind an old logout must not start after the wait gave up.
+        Awaiting::Connect { .. } => {
+            visit
+                .requests
+                .retain(|request| !matches!(request, WolServiceRequest::Connect { .. }));
+            visit.connect_failed()
+        }
         _ => WolStep::LocaleDecided,
     };
     apply(state, step);

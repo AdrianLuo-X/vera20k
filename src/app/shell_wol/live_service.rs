@@ -902,8 +902,25 @@ pub(super) fn poll(state: &mut AppState) -> Option<Instant> {
         return cleanup_deadline.or_else(|| relay_pending.then(|| Instant::now() + POLL_INTERVAL));
     }
     if cleanup_deadline.is_some() {
-        // Welcome/menu navigation remains responsive. Keep this visit's
-        // existing service requests until the old bearer cleanup is retired.
+        // The old bearer's logout may retry for a while in an outage. Answer
+        // the requests that need no lobby, so the player reaches the login
+        // page and its connect wait rather than a blank screen; keep the rest
+        // queued until that cleanup is retired.
+        let requests = state
+            .frontend
+            .wol
+            .as_mut()
+            .map(|visit| visit.take_service_requests())
+            .unwrap_or_default();
+        let mut kept = Vec::new();
+        for request in requests {
+            if !answer_local_request(state, &request) {
+                kept.push(request);
+            }
+        }
+        if let Some(visit) = state.frontend.wol.as_mut() {
+            visit.requests.splice(0..0, kept);
+        }
         return cleanup_deadline;
     }
     if state
@@ -1143,7 +1160,24 @@ pub(super) fn leave_visit(state: &mut AppState) {
     state.frontend.wol_account.password.clear();
 }
 
-fn request_service(state: &mut AppState, service: &mut LiveService, request: WolServiceRequest) {
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32", target_os = "unknown")))]
+/// The game is closing: hand the online visit to the ordinary cleanup owner
+/// (finish, leave, logout and the relay departure), as Back does, and end
+/// the visit so nothing but that cleanup runs until exit.
+pub(crate) fn retire_visit_for_exit(state: &mut AppState) {
+    if state
+        .frontend
+        .wol
+        .as_ref()
+        .is_some_and(|visit| visit.provider == WolProvider::Online)
+    {
+        leave_visit(state);
+        state.frontend.wol = None;
+    }
+}
+
+/// Answer a request that needs no lobby; false for any other.
+fn answer_local_request(state: &mut AppState, request: &WolServiceRequest) -> bool {
     match request {
         WolServiceRequest::EnsureApi => {
             service_event(state, WolServiceEvent::Api(WolApiStatus::Available))
@@ -1168,6 +1202,19 @@ fn request_service(state: &mut AppState, service: &mut LiveService, request: Wol
             );
             service_event(state, WolServiceEvent::NetStatus(0x0004_012F));
         }
+        _ => return false,
+    }
+    true
+}
+
+fn request_service(state: &mut AppState, service: &mut LiveService, request: WolServiceRequest) {
+    if answer_local_request(state, &request) {
+        return;
+    }
+    match request {
+        WolServiceRequest::EnsureApi
+        | WolServiceRequest::ListCredentials
+        | WolServiceRequest::FetchServers { .. } => {}
         WolServiceRequest::Connect { nickname, .. } => {
             service.clear_cleanup();
             service.auth_attempt = service.auth_attempt.wrapping_add(1);

@@ -592,20 +592,10 @@ impl LanService {
         session: &super::match_runtime::session::MatchSession,
         _now: u32,
     ) -> anyhow::Result<bool> {
-        let launch = session
-            .network_setup()
-            .ok_or_else(|| anyhow::anyhow!("departure requires an admitted setup"))?;
-        let message = LanMessage::named(LanNamedMessage::Departure, &launch.local_player().name)?
-            .with_session_proof(&self.control_proof()?)?;
         // Native5E09CD..5E0AC6 services/drains reliable direct Type10 before
         // returning. VERA retains the entire bounded batch through the same
         // setup FIFO when the larger roster/map stream fills global160.
-        let mut packets = (0..launch.humans.len())
-            .filter(|source| *source != launch.local_player_index)
-            .filter_map(|source| session.network_endpoint(source))
-            .map(|endpoint| (message.as_bytes().to_vec(), direct(endpoint)))
-            .collect::<Vec<_>>();
-        packets.push((message.as_bytes().to_vec(), GlobalDestination::BROADCAST));
+        let packets = departure_packets(session, Some(&self.control_proof()?))?;
         self.queue_setup(packets.into_iter())
     }
 
@@ -4292,13 +4282,25 @@ pub(crate) fn close(state: &mut AppState) {
             return;
         }
     }
-    if let Ok(message) = LanMessage::named(LanNamedMessage::Departure, &local_name(state)) {
-        send(
-            state,
-            &message,
-            GlobalDestination::Broadcast { port_override: 0 },
-            false,
-        );
+    // A room, loading screen or match drops an unproven departure, so one
+    // sent from there carries this visit's proof and goes to each player too.
+    let proof = state
+        .match_state
+        .lan_service
+        .as_ref()
+        .and_then(|service| service.control_proof().ok());
+    let packets = departure_packets(&state.match_state.session, proof.as_ref()).or_else(|_| {
+        LanMessage::named(LanNamedMessage::Departure, &local_name(state)).map(|message| {
+            vec![(
+                message.as_bytes().to_vec(),
+                GlobalDestination::Broadcast { port_override: 0 },
+            )]
+        })
+    });
+    if let Ok(packets) = packets {
+        for (bytes, destination) in packets {
+            send_bytes(state, &bytes, destination, false);
+        }
         if let Some(transport) = state
             .match_state
             .lan_service
@@ -4309,6 +4311,28 @@ pub(crate) fn close(state: &mut AppState) {
         }
     }
     state.match_state.lan_service = None;
+}
+
+/// The local player's departure to each other admitted player and the
+/// broadcast address, carrying `proof` when the visit has one.
+fn departure_packets(
+    session: &super::match_runtime::session::MatchSession,
+    proof: Option<&LanSessionProof>,
+) -> anyhow::Result<Vec<(Vec<u8>, GlobalDestination)>> {
+    let launch = session
+        .network_setup()
+        .ok_or_else(|| anyhow::anyhow!("departure requires an admitted setup"))?;
+    let mut message = LanMessage::named(LanNamedMessage::Departure, &launch.local_player().name)?;
+    if let Some(proof) = proof {
+        message = message.with_session_proof(proof)?;
+    }
+    let mut packets = (0..launch.humans.len())
+        .filter(|source| *source != launch.local_player_index)
+        .filter_map(|source| session.network_endpoint(source))
+        .map(|endpoint| (message.as_bytes().to_vec(), direct(endpoint)))
+        .collect::<Vec<_>>();
+    packets.push((message.as_bytes().to_vec(), GlobalDestination::BROADCAST));
+    Ok(packets)
 }
 
 pub(crate) fn online_retirement_pending(state: &AppState) -> bool {
@@ -5485,6 +5509,27 @@ mod tests {
             next_message(&mut receiver, &session).payload,
             progress.as_bytes()
         );
+    }
+
+    #[test]
+    fn a_closing_departure_reaches_each_player_with_the_room_proof() {
+        let mut host = service();
+        let mut guest = service();
+        let host_address = host.transport.as_ref().unwrap().primary_addr().unwrap();
+        let guest_address = guest.transport.as_ref().unwrap().primary_addr().unwrap();
+        let host_session = session(true, guest_address);
+        let guest_session = session(false, host_address);
+        let proof = guest.control_proof().unwrap();
+        let packets = departure_packets(&guest_session, Some(&proof)).unwrap();
+        assert_eq!(packets[0].1, direct(host_address));
+        for (bytes, destination) in packets {
+            assert!(guest.send(&bytes, destination, false));
+        }
+        guest.transport.as_mut().unwrap().service(31);
+        let departure =
+            LanMessage::decode(&next_message(&mut host, &host_session).payload).unwrap();
+        assert_eq!(departure.kind(), LanMessageKind::Departure);
+        assert_eq!(departure.session_proof().unwrap(), Some(proof));
     }
 
     #[test]
